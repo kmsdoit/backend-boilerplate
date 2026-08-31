@@ -1,0 +1,24 @@
+{
+  "name": "@app/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/scripts/server.ts",
+    "start": "bun run src/scripts/server.ts",
+    "dev:token": "bun run src/scripts/dev-token.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@app/config": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@app/database": "workspace:*",
+    "@app/observability": "workspace:*",
+    "hono": "^4.13.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "^5.7.0"
+  }
+}

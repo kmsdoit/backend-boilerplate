@@ -1,0 +1,49 @@
+### Scratch requests for the JetBrains/VS Code HTTP client.
+### Get a token first:  bun run --cwd backend dev:token
+@baseUrl = http://localhost:3000
+@token = paste-a-dev-token-here
+
+### Liveness (no auth)
+GET {{baseUrl}}/health
+
+### Readiness (no auth)
+GET {{baseUrl}}/ready
+
+### Metrics (no auth)
+GET {{baseUrl}}/metrics
+
+### List users
+GET {{baseUrl}}/users?page=1&pageSize=20
+Authorization: Bearer {{token}}
+
+### Search and filter
+GET {{baseUrl}}/users?q=admin&role=admin&status=active
+Authorization: Bearer {{token}}
+
+### Create a user
+POST {{baseUrl}}/users
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "email": "new@example.com",
+  "name": "New User",
+  "role": "member"
+}
+
+### Get one
+GET {{baseUrl}}/users/1
+Authorization: Bearer {{token}}
+
+### Update (absent keys are left untouched, never cleared)
+PATCH {{baseUrl}}/users/1
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Renamed"
+}
+
+### Soft delete
+DELETE {{baseUrl}}/users/1
+Authorization: Bearer {{token}}

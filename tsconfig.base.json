@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    // Shared strict baseline for every workspace package. Each package's own
+    // tsconfig.json extends this and only re-declares what genuinely differs
+    // for that package (ambient `types`, outDir, ...).
+    "strict": true,
+    "target": "ES2022",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+
+    // packages/database's entities use MikroORM decorators, and backend
+    // imports those entities, so every package needs decorator syntax
+    // support regardless of whether its own source declares any.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    // Strictness beyond `strict`. Turn additional flags on one at a time
+    // against a green typecheck + test suite, never as a batch.
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  }
+}

@@ -1,0 +1,25 @@
+# Production. Every secret and environment-specific endpoint is a ${VAR}
+# placeholder resolved from the process environment at startup -- this file is
+# safe to commit and safe to ship in a ConfigMap. If a variable is missing the
+# process fails at load with the name of the variable and the config path that
+# needed it, rather than starting up in a half-configured state.
+application:
+  name: backend-boilerplate
+  environment: production
+
+server:
+  port: 3000
+  # One comma-separated env var, split by the loader.
+  corsOrigins: ${CORS_ORIGINS}
+  maxBodyBytes: 1048576
+  rateLimit:
+    windowSeconds: 60
+    maxWrites: 30
+
+database:
+  url: ${DATABASE_URL}
+
+auth:
+  jwtSecret: ${JWT_SECRET}
+  issuer: ${JWT_ISSUER}
+  audience: ${JWT_AUDIENCE}

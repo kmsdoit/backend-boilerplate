@@ -1,0 +1,53 @@
+{
+  "name": "backend-boilerplate",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "backend",
+    "packages/config",
+    "packages/contracts",
+    "packages/database",
+    "packages/observability"
+  ],
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "dev": "bun run --cwd backend dev",
+    "start": "bun run --cwd backend start",
+    "build:lambda": "bash scripts/build-lambda.sh",
+    "typecheck": "bun run typecheck:config && bun run typecheck:contracts && bun run typecheck:observability && bun run typecheck:database && bun run typecheck:api",
+    "typecheck:api": "bun run --cwd backend typecheck",
+    "typecheck:config": "bun run --cwd packages/config typecheck",
+    "typecheck:contracts": "bun run --cwd packages/contracts typecheck",
+    "typecheck:database": "bun run --cwd packages/database typecheck",
+    "typecheck:observability": "bun run --cwd packages/observability typecheck",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.ts\"",
+    "format:check": "prettier --check \"**/*.ts\"",
+    "test": "APP_CONFIG_PATH=./config/application.test.yml vitest run",
+    "test:unit": "APP_CONFIG_PATH=./config/application.test.yml vitest run --project config --project contracts --project observability",
+    "test:integration": "APP_CONFIG_PATH=./config/application.test.yml vitest run --project database --project backend",
+    "test:watch": "APP_CONFIG_PATH=./config/application.test.yml vitest",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down -v",
+    "db:generate": "bun run --cwd packages/database db:generate",
+    "db:migrate": "bun run --cwd packages/database db:migrate",
+    "db:rollback": "bun run --cwd packages/database db:rollback",
+    "db:status": "bun run --cwd packages/database db:status",
+    "db:seed": "bun run --cwd packages/database db:seed",
+    "test:db:up": "docker compose up -d --wait postgres-test",
+    "test:db:migrate": "APP_CONFIG_PATH=$PWD/config/application.test.yml bun run --cwd packages/database db:migrate",
+    "verify": "bun run lint && bun run format:check && bun run typecheck && bun run test",
+    "new:domain": "bun run scripts/new-domain.ts",
+    "remove:domain": "bun run scripts/remove-domain.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9",
+    "eslint": "^9",
+    "eslint-config-prettier": "^9",
+    "prettier": "^3",
+    "typescript-eslint": "^8",
+    "vitest": "3.2.4",
+    "yaml": "2.9.0"
+  }
+}

@@ -1,0 +1,100 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # Fast gate: everything that does not need a database. Kept separate so a
+  # formatting mistake fails in seconds instead of waiting on Postgres.
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run format:check
+      - run: bun run typecheck
+      # TRAP: this filter lists projects explicitly. A new workspace package
+      # missing from `test:unit` in package.json is silently never run here.
+      - run: bun run test:unit
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: app_test
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: local_password
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run test:db:migrate
+      - run: bun run test:integration
+      # The Lambda bundle is built and invoked in the integration suite
+      # (backend/src/scripts/lambda.test.ts), but bundling itself can break
+      # independently -- knex requires database drivers that are not installed,
+      # so a dependency bump can add one to the list that must be externalized.
+      - run: bun run build:lambda
+
+  # The boilerplate's core promise: you can delete the bundled example, scaffold
+  # your own domain, and still have a working, tested service. Without this job
+  # that is a claim in the README; with it, a regression in new:domain or
+  # remove:domain fails the build. It has already caught three (a wiring line
+  # deleted whole instead of edited, a dangling uniqueConstraintErrors entry,
+  # and a seed.ts left importing a removed entity).
+  scaffolding:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: app_test
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: local_password
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d app_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Delete the example and scaffold a new domain
+        run: |
+          bun run remove:domain user
+          bun run new:domain order
+      - name: The scaffolding still builds and its own tests still pass
+        run: |
+          bun run typecheck
+          bun run lint
+          bun run test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The image is built on every push because the failure mode it catches --
+      # a workspace package added without updating the COPY list -- is invisible
+      # to every other job here.
+      - run: docker build -f backend/Dockerfile -t ${{ github.repository }}:ci .

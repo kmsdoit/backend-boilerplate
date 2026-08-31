@@ -1,0 +1,63 @@
+# Copy to config/application.yml and edit. Point APP_CONFIG_PATH at a
+# different file to switch environments -- there is no .env and no dotenv.
+#
+# Any string whose ENTIRE value is ${SOME_VAR} is replaced with that
+# environment variable at load time, and startup fails loudly if it is unset.
+# Partial interpolation ("prefix-${VAR}") is deliberately NOT supported: it
+# makes it impossible to tell a literal from a placeholder at a glance.
+
+application:
+  name: backend-boilerplate
+  environment: development
+
+server:
+  port: 3000
+
+  # Origins allowed to call this API from a browser. Accepts a YAML list (as
+  # here) or a single comma-separated string -- the string form exists because
+  # ${VAR} substitution replaces a whole value, so one env var carrying
+  # "https://a.example,https://b.example" has to be split by the loader.
+  corsOrigins:
+    - http://localhost:5173
+    - http://localhost:3000
+
+  # Request body size cap, in bytes. Without this, any JSON body is unbounded.
+  maxBodyBytes: 1048576
+
+  # Applied to writes (POST/PATCH/PUT/DELETE) only; reads are not throttled.
+  # In-memory and therefore per-process -- see backend/src/middleware/rate-limit.ts
+  # before raising replica count.
+  rateLimit:
+    windowSeconds: 60
+    maxWrites: 30
+
+  # Hard ceiling on a single request, in milliseconds. Without one, a handler
+  # awaiting something that never settles holds its connection -- and its
+  # database connection -- until the client gives up, which a machine client
+  # may never do.
+  requestTimeoutMs: 15000
+
+database:
+  url: postgresql://app:local_password@localhost:5433/app
+  # Optional. Defaults shown.
+  pool:
+    min: 2
+    max: 10
+
+auth:
+  # Minimum 32 characters. In production supply it as ${JWT_SECRET} rather
+  # than writing the value into this file.
+  #
+  # The loader REFUSES TO START in production if this still contains an example
+  # value ("change-me", "local-development", "test-only"). Copying the sample
+  # config and deploying it is the most common way a boilerplate leaks, and it
+  # is silent -- every token in production becomes forgeable by anyone who can
+  # read the repository.
+  jwtSecret: change-me-in-production-at-least-32-chars-please
+
+  # Optional. Set once your token issuer's `iss`/`aud` are decided. While a
+  # value is absent the corresponding check is skipped; once set, a mismatch
+  # is rejected exactly like a bad signature. "Optional" describes the value,
+  # not the check.
+  # issuer: https://auth.example.com
+  # audience: backend-boilerplate

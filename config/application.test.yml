@@ -1,0 +1,25 @@
+# Used by `bun run test` (APP_CONFIG_PATH is set by the script). Points at the
+# `postgres-test` service in compose.yaml, on port 5434 -- a separate database
+# from local development so a test run cannot wipe data you were using.
+application:
+  name: backend-boilerplate
+  environment: test
+
+server:
+  port: 3001
+  corsOrigins:
+    - http://localhost:5173
+  maxBodyBytes: 1048576
+  rateLimit:
+    # Deliberately low so a rate-limit test can hit the ceiling in a few
+    # requests instead of 30.
+    windowSeconds: 60
+    maxWrites: 5
+
+database:
+  url: postgresql://app:local_password@localhost:5434/app_test
+
+auth:
+  jwtSecret: test-only-secret-value-at-least-32-characters
+  issuer: https://auth.test.local
+  audience: backend-boilerplate-test

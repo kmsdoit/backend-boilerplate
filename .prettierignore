@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+*.yml
+*.yaml
+scripts/*.sh
+packages/database/migrations

@@ -1,0 +1,20 @@
+# Local development. Matches the `postgres` service in compose.yaml.
+application:
+  name: backend-boilerplate
+  environment: development
+
+server:
+  port: 3000
+  corsOrigins:
+    - http://localhost:5173
+    - http://localhost:3000
+  maxBodyBytes: 1048576
+  rateLimit:
+    windowSeconds: 60
+    maxWrites: 30
+
+database:
+  url: postgresql://app:local_password@localhost:5433/app
+
+auth:
+  jwtSecret: local-development-only-secret-at-least-32-chars

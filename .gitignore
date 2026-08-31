@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+*.log
+.DS_Store
+.idea
+.vscode
+
+# Real environment config. Copy config/application.sample.yml and edit.
+# application.yml is committed here as a working local-dev default; delete
+# this comment and uncomment the line below once it holds anything secret.
+# config/application.yml

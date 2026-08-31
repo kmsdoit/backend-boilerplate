@@ -1,0 +1,14 @@
+{
+  // Exists so ad-hoc scripts run with the *repository root* as cwd still get
+  // decorator support. Bun resolves tsconfig.json starting from
+  // process.cwd() -- NOT by walking up from the entry file -- so without
+  // this file a root-cwd invocation gets bare TS defaults (no
+  // experimentalDecorators) and MikroORM entities fail at runtime with
+  // `TypeError: undefined is not an object (evaluating 'target.constructor')`.
+  //
+  // Deliberately `"files": []`: this is not meant to be opened as a whole-repo
+  // `tsc -p .` project. Each package's `typecheck` script runs with cwd inside
+  // that package, so tsc finds that package's own tsconfig.json, never this one.
+  "extends": "./tsconfig.base.json",
+  "files": []
+}

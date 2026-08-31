@@ -1,0 +1,49 @@
+name: backend-boilerplate
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: local_password
+    ports:
+      - "5433:5432"
+    volumes:
+      # PostgreSQL 18 moved the data directory; mount the parent so the
+      # volume survives an image upgrade.
+      - pg-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  # Separate database for the integration suite, on its own port and its own
+  # volume. Sharing one database with local development means a `bun run test`
+  # can wipe data you were in the middle of looking at.
+  postgres-test:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: app_test
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: local_password
+    ports:
+      - "5434:5432"
+    tmpfs:
+      # Test data never needs to outlive the container, and tmpfs makes the
+      # suite meaningfully faster. Mounted at the PARENT directory, not at
+      # .../data: PostgreSQL 18 keeps its cluster in a version-specific
+      # subdirectory, and the image refuses to start if it finds a mount at
+      # the pre-18 path.
+      - /var/lib/postgresql:mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  pg-data:

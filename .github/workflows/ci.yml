@@ -4,9 +4,22 @@ on:
   push:
   pull_request:
 
+# WHY NO `services:` BLOCK ANYWHERE HERE.
+#
+# GitHub Actions service containers can set the image, env, ports and `docker
+# create` options -- but not the container's COMMAND, which comes after the
+# image name. ScyllaDB needs `--alternator-port 8000` there to expose its
+# DynamoDB API at all, and its entrypoint parses arguments only (verified: the
+# image's docker-entrypoint.py goes straight to commandlineparser.parse(), with
+# no environment-variable path).
+#
+# So the database is started with `docker compose` instead -- the same file, the
+# same flags and the same healthcheck a developer runs locally. CI and local
+# cannot drift, which is worth more here than the slightly tidier syntax.
+
 jobs:
-  # Fast gate: everything that does not need a database. Kept separate so a
-  # formatting mistake fails in seconds instead of waiting on Postgres.
+  # Fast gate: everything that needs no database. Kept separate so a formatting
+  # mistake fails in seconds instead of waiting on a database to boot.
   static:
     runs-on: ubuntu-latest
     steps:
@@ -24,77 +37,71 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_DB: app_test
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: local_password
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd "pg_isready -U app -d app_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - run: bun run test:db:migrate
+
+      - name: Start ScyllaDB
+        # --wait blocks on the compose healthcheck, so the suite never starts
+        # against a node that is still coming up. Tables are provisioned by the
+        # vitest preflight, not here.
+        run: bun run test:db:up
+
       - run: bun run test:integration
-      # The Lambda bundle is built and invoked in the integration suite
-      # (backend/src/scripts/lambda.test.ts), but bundling itself can break
-      # independently -- knex requires database drivers that are not installed,
-      # so a dependency bump can add one to the list that must be externalized.
+
+      # Built separately from the suite that invokes the handler: bundling can
+      # break on its own, since a dependency bump can pull in a module that has
+      # to be marked external.
       - run: bun run build:lambda
+
+      - name: ScyllaDB logs
+        # Only on failure, and only the tail: a node that refuses to become
+        # healthy says why here, and without it the job just reports a timeout.
+        if: failure()
+        run: docker compose logs --tail 100 scylla-test
 
   # The boilerplate's core promise: you can delete the bundled example, scaffold
   # your own domain, and still have a working, tested service. Without this job
   # that is a claim in the README; with it, a regression in new:domain or
-  # remove:domain fails the build. It has already caught three (a wiring line
-  # deleted whole instead of edited, a dangling uniqueConstraintErrors entry,
-  # and a seed.ts left importing a removed entity).
+  # remove:domain fails the build. It has already caught several -- a wiring
+  # line deleted whole instead of edited, a dangling error-map entry, a seed
+  # left importing a removed module, and a second table the example owned being
+  # left behind.
   scaffolding:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_DB: app_test
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: local_password
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd "pg_isready -U app -d app_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
+
+      - name: Start ScyllaDB
+        run: bun run test:db:up
+
       - name: Delete the example and scaffold a new domain
         run: |
           bun run remove:domain user
           bun run new:domain order
+
       - name: The scaffolding still builds and its own tests still pass
         run: |
           bun run typecheck
           bun run lint
           bun run test
 
+      - name: ScyllaDB logs
+        if: failure()
+        run: docker compose logs --tail 100 scylla-test
+
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The image is built on every push because the failure mode it catches --
-      # a workspace package added without updating the COPY list -- is invisible
-      # to every other job here.
+      # Built on every push because the failure mode it catches -- a workspace
+      # package added without updating the Dockerfile's COPY list -- is
+      # invisible to every other job here.
       - run: docker build -f backend/Dockerfile -t ${{ github.repository }}:ci .

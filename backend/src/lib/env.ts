@@ -13,7 +13,6 @@ export type Env = {
   NODE_ENV: "development" | "production" | "test";
   SERVICE_NAME: string;
   PORT: number;
-  DATABASE_URL: string;
   JWT_SECRET: string;
 };
 
@@ -21,6 +20,5 @@ export const env: Env = {
   NODE_ENV: applicationConfig.application.environment,
   SERVICE_NAME: applicationConfig.application.name,
   PORT: applicationConfig.server.port,
-  DATABASE_URL: applicationConfig.database.url,
   JWT_SECRET: applicationConfig.auth.jwtSecret,
 };

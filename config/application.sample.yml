@@ -37,12 +37,6 @@ server:
   # may never do.
   requestTimeoutMs: 15000
 
-database:
-  url: postgresql://app:local_password@localhost:5433/app
-  # Optional. Defaults shown.
-  pool:
-    min: 2
-    max: 10
 
 auth:
   # Minimum 32 characters. In production supply it as ${JWT_SECRET} rather
@@ -61,3 +55,13 @@ auth:
   # not the check.
   # issuer: https://auth.example.com
   # audience: backend-boilerplate
+
+# DynamoDB, or anything speaking its API. Locally that is ScyllaDB's Alternator
+# (compose.yaml); in AWS, drop `endpoint` and the credentials so the SDK uses
+# the regional endpoint and the task/instance role.
+dynamo:
+  endpoint: http://localhost:8000
+  region: us-east-1
+  tableName: app
+  accessKeyId: local
+  secretAccessKey: local

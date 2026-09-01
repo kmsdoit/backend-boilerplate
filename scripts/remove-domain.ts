@@ -28,11 +28,24 @@ if (!rawName || !/^[a-z][a-z0-9-]*$/.test(rawName)) {
 const pascal = rawName.replace(/(^|-)([a-z])/g, (_, __, c: string) => c.toUpperCase());
 const camel = pascal.charAt(0).toLowerCase() + pascal.slice(1);
 const plural = `${rawName}s`;
+const upper = rawName.replace(/-/g, "_").toUpperCase();
+
+/**
+ * keys.ts re-exports every domain's helpers on one line, so removing a domain
+ * means rewriting that line rather than deleting it. Reading the file after the
+ * block above has gone is the simplest way to get it right.
+ */
+function keysExportLine(): string {
+  const keysPath = resolve(root, "packages/database/src/keys.ts");
+  const exported = [...readFileSync(keysPath, "utf8").matchAll(/^export const (\w+)/gm)]
+    .map((match) => match[1])
+    .filter((name) => name !== undefined);
+  return exported.length > 0 ? `export { ${exported.join(", ")} } from "./keys.ts";\n` : "";
+}
 
 const files = [
   `packages/contracts/src/${rawName}.ts`,
   `packages/contracts/src/${rawName}.test.ts`,
-  `packages/database/src/entities/${rawName}.ts`,
   `packages/database/src/${rawName}.integration.test.ts`,
   // Includes the domain's own integration tests, which live beside its code.
   `backend/src/${rawName}`,
@@ -77,18 +90,14 @@ function unwire(relativePath: string, rules: [RegExp, string?][]): void {
 unwire("packages/contracts/src/index.ts", [
   [new RegExp(`export \\{[^}]*\\} from "\\./${rawName}\\.ts";\\n`, "g")],
 ]);
-unwire("packages/database/src/entities/index.ts", [
-  [new RegExp(`.*from "\\./${rawName}\\.ts";\\n`, "g")],
-  [new RegExp(`^\\s*${pascal},\\n`, "gm")],
+// Key helpers live in the shared keys.ts -- one screen for the whole table
+// layout -- inside a `// domain:<name>` ... `// /domain:<name>` block, so the
+// whole block comes out in one edit no matter what extra helpers it holds.
+unwire("packages/database/src/keys.ts", [
+  [new RegExp(`\\n?// domain:${rawName}\\n[\\s\\S]*?// /domain:${rawName}\\n`, "g")],
 ]);
 unwire("packages/database/src/index.ts", [
-  [new RegExp(`export \\{[^}]*\\} from "\\./entities/${rawName}\\.ts";\\n`, "g")],
-  // The bundled example is also named in the aggregate entities export --
-  // strip just that one name and keep the rest of the line.
-  [
-    new RegExp(`(export \\{[^}]*?), ${pascal}([^}]*\\} from "\\./entities/index\\.ts";)`, "g"),
-    "$1$2",
-  ],
+  [new RegExp(`export \\{[^}]*\\} from "\\./keys\\.ts";\\n`, "g"), keysExportLine],
 ]);
 unwire("backend/src/api/routes/index.ts", [
   [new RegExp(`.*from "\\./${rawName}\\.ts";\\n`, "g")],
@@ -120,41 +129,38 @@ unwire("backend/src/api/routes/errors.ts", [
  * removal instead of failing on a dangling import.
  */
 const seedPath = resolve(root, "packages/database/src/seed.ts");
-if (existsSync(seedPath) && new RegExp(`\\b${pascal}\\b`).test(readFileSync(seedPath, "utf8"))) {
+if (
+  existsSync(seedPath) &&
+  new RegExp(`${camel}Key|${pascal}`, "i").test(readFileSync(seedPath, "utf8"))
+) {
   writeFileSync(
     seedPath,
     `#!/usr/bin/env bun
 /**
  * Idempotent development seed: \`bun run db:seed\`.
  *
- * Idempotent matters -- a seed you can only run against an empty database is a
- * seed nobody runs. Look up each row and update it rather than inserting
- * blindly, so re-running is a no-op instead of a unique-constraint error.
+ * Idempotent matters -- a seed you can only run against an empty table is a
+ * seed nobody runs. A conditional Put makes re-running a no-op instead of an
+ * error, and does it in one round trip rather than read-then-write.
  */
 import { applicationConfig } from "@app/config";
 
-import { closeORM, getEntityManager } from "./orm.ts";
+import { tableName } from "./client.ts";
+import { provisionTable } from "./table.ts";
 
-async function seed(): Promise<void> {
-  if (applicationConfig.application.environment === "production") {
-    throw new Error("Refusing to seed a production database.");
-  }
-
-  const em = await getEntityManager({ databaseUrl: applicationConfig.database.url });
-
-  // Seed your domains here, e.g.:
-  //   const existing = await em.findOne(Order, { reference: "demo", deletedAt: null });
-  //   if (!existing) em.persist(em.create(Order, { reference: "demo" }));
-
-  await em.flush();
-  console.log(\`nothing to seed for \${applicationConfig.application.name}\`);
+if (applicationConfig.application.environment === "production") {
+  throw new Error("Refusing to seed a production table.");
 }
 
-try {
-  await seed();
-} finally {
-  await closeORM();
-}
+await provisionTable();
+
+// Seed your domains here, e.g.:
+//   await doc.send(new PutCommand({
+//     TableName: tableName,
+//     Item: { pk: orderKey("demo"), id: "demo", name: "Demo", ... },
+//   }));
+
+console.log(\`table "\${tableName}" ready\`);
 `,
   );
   console.log("  reset    packages/database/src/seed.ts (it seeded this domain)");

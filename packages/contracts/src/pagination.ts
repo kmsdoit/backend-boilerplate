@@ -4,32 +4,31 @@ export const DEFAULT_PAGE_SIZE = 20;
 export const MAX_PAGE_SIZE = 100;
 
 /**
- * `z.coerce` because query strings are always strings: `?page=2` arrives as
- * "2". Coercing here rather than in each route means a handler receives a
- * real number and cannot forget the conversion.
+ * Cursor pagination, not page numbers.
  *
- * MAX_PAGE_SIZE is a hard ceiling, not a suggestion -- without it a caller
- * can ask for pageSize=1000000 and turn a paginated endpoint into a full
- * table scan.
+ * This is forced by the store -- DynamoDB pages with a `LastEvaluatedKey` and
+ * has no OFFSET -- but it is also the better contract. A cursor stays correct
+ * when items are inserted or removed mid-listing; `?page=3` silently skips or
+ * repeats items when the underlying set shifts under it.
+ *
+ * What it cannot give you is a total count, because counting means reading
+ * every matching item. The response therefore has no `total` and no
+ * `pageCount`, and no amount of client convenience justifies adding one: it
+ * would turn every list request into a full scan.
  */
 export const paginationQueryShape = {
-  page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  limit: z.coerce.number().int().min(1).max(MAX_PAGE_SIZE).default(DEFAULT_PAGE_SIZE),
+  /** Opaque. Comes from a previous response's `nextCursor`; never constructed by a caller. */
+  cursor: z.string().min(1).optional(),
 };
 
 export type PaginationQuery = {
-  page: number;
-  pageSize: number;
+  limit: number;
+  cursor?: string;
 };
 
-export type Paginated<T> = {
+export type Page<T> = {
   items: T[];
-  page: number;
-  pageSize: number;
-  total: number;
+  /** Absent when there are no more items. Its presence is the only "has more" signal. */
+  nextCursor?: string;
 };
-
-/** Offset for a 1-based page number. Kept here so it is defined exactly once. */
-export function toOffset({ page, pageSize }: PaginationQuery): number {
-  return (page - 1) * pageSize;
-}

@@ -1,49 +1,61 @@
 name: backend-boilerplate
 
+# ScyllaDB with Alternator, its DynamoDB-compatible API. You write against the
+# AWS SDK's DynamoDB client here and change only the endpoint to run against
+# real DynamoDB later -- that portability is the whole reason this stack was
+# chosen over CQL.
+#
+# TRAP -- the tag matters. On scylladb/scylla:6.2 a Query against a GSI crashes
+# the server ("Tried to build a global schema for view ... with an
+# uninitialized base info") even though DescribeTable reports the index ACTIVE.
+# Verified fixed on 2026.2.x, which is what `latest` resolves to. Do not pin
+# back to 6.x without re-testing a GSI query.
 services:
-  postgres:
-    image: postgres:18-alpine
-    environment:
-      POSTGRES_DB: app
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: local_password
+  scylla:
+    image: scylladb/scylla:latest
+    command: >-
+      --smp 1 --memory 1G --overprovisioned 1
+      --alternator-port 8000
+      --alternator-write-isolation always
     ports:
-      - "5433:5432"
+      # 8000 is Alternator (DynamoDB API). 9042 is CQL, exposed only so you can
+      # inspect what Alternator actually stored with cqlsh.
+      - "8000:8000"
+      - "9042:9042"
     volumes:
-      # PostgreSQL 18 moved the data directory; mount the parent so the
-      # volume survives an image upgrade.
-      - pg-data:/var/lib/postgresql
+      - scylla-data:/var/lib/scylla
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      # NOT localhost: Scylla binds Alternator to the node's listen address,
+      # not 127.0.0.1, so a loopback probe inside the container fails with
+      # "connection refused" while the port works fine from outside.
+      test: ["CMD-SHELL", "curl -sf http://$$(hostname -i):8000/ -o /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 12
-      start_period: 5s
+      retries: 24
+      start_period: 20s
 
-  # Separate database for the integration suite, on its own port and its own
-  # volume. Sharing one database with local development means a `bun run test`
-  # can wipe data you were in the middle of looking at.
-  postgres-test:
-    image: postgres:18-alpine
-    environment:
-      POSTGRES_DB: app_test
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: local_password
+  # Separate node for the integration suite, on its own port. Sharing one node
+  # with local development means a test run can wipe data you were looking at.
+  scylla-test:
+    image: scylladb/scylla:latest
+    command: >-
+      --smp 1 --memory 1G --overprovisioned 1
+      --alternator-port 8000
+      --alternator-write-isolation always
     ports:
-      - "5434:5432"
+      - "8001:8000"
     tmpfs:
-      # Test data never needs to outlive the container, and tmpfs makes the
-      # suite meaningfully faster. Mounted at the PARENT directory, not at
-      # .../data: PostgreSQL 18 keeps its cluster in a version-specific
-      # subdirectory, and the image refuses to start if it finds a mount at
-      # the pre-18 path.
-      - /var/lib/postgresql:mode=1777
+      # Test data never needs to outlive the container.
+      - /var/lib/scylla:mode=1777
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      # NOT localhost: Scylla binds Alternator to the node's listen address,
+      # not 127.0.0.1, so a loopback probe inside the container fails with
+      # "connection refused" while the port works fine from outside.
+      test: ["CMD-SHELL", "curl -sf http://$$(hostname -i):8000/ -o /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
-      retries: 12
-      start_period: 5s
+      retries: 24
+      start_period: 20s
 
 volumes:
-  pg-data:
+  scylla-data:

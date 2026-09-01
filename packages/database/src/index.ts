@@ -1,7 +1,7 @@
-export { createMikroOrmConfig, type DatabaseConfigOptions } from "./config.ts";
-export { BaseEntity, User, entities } from "./entities/index.ts";
-// domain-entity-exports: `bun run new:domain` inserts above this line.
-export { closeORM, getEntityManager, initializeORM } from "./orm.ts";
-export { isUniqueViolation, PG_UNIQUE_VIOLATION_CODE } from "./errors.ts";
-/** Re-exported so consumers do not need their own MikroORM dependency. */
-export type { EntityManager, FilterQuery } from "@mikro-orm/postgresql";
+export { doc, rawClient, tableName } from "./client.ts";
+export { GSI1, listSortKey, USER_LIST_PARTITION, userKey, emailKey } from "./keys.ts";
+export { provisionTable, tableExists } from "./table.ts";
+export { isConditionalCheckFailed, UniqueConstraintError } from "./errors.ts";
+export { decodeCursor, encodeCursor } from "./cursor.ts";
+/** Re-exported so consumers do not need their own AWS SDK dependency. */
+export type { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";

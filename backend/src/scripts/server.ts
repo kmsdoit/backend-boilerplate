@@ -1,19 +1,23 @@
 #!/usr/bin/env bun
 import { logger } from "@app/observability";
 
+import { tableExists } from "@app/database";
+
 import app from "../api/hono.ts";
-import { closeORM, initializeORM } from "../lib/db.ts";
 import { env } from "../lib/env.ts";
 
 process.title = `${env.SERVICE_NAME}:api`;
 
 /**
- * Connect before serving. Without this the first request pays the connection
- * cost and, worse, a bad DATABASE_URL is not discovered until a user hits an
- * endpoint -- by which point the process has already passed its startup probe
- * and been sent traffic.
+ * Fail fast on a missing table. There is no connection to open -- the SDK is
+ * lazy and stateless -- so without this check a misconfigured endpoint or table
+ * name is not discovered until a user hits an endpoint, by which point the
+ * process has already passed its startup probe and been sent traffic.
  */
-await initializeORM();
+if (!(await tableExists())) {
+  logger.error("table is missing or not ACTIVE; run `bun run db:provision`");
+  process.exit(1);
+}
 
 /**
  * Bun.serve() rather than `export default { port, fetch }`, because graceful
@@ -36,13 +40,11 @@ const SHUTDOWN_GRACE_MS = 10_000;
 let shuttingDown = false;
 
 /**
- * ORDER MATTERS, and the obvious order is wrong.
+ * Stop the listener first, then let in-flight requests drain.
  *
- * Stop the listener FIRST and let in-flight requests drain, and only then
- * close the database pool. Closing the pool first -- the intuitive "release
- * resources" reflex -- kills the queries belonging to the very requests you
- * are trying to let finish, so every deploy returns a handful of 500s to
- * users who were already being served.
+ * There is no connection pool to close here -- the DynamoDB SDK is stateless
+ * over HTTP -- which removes the ordering hazard a pooled database has, where
+ * releasing the pool first kills the very requests you are draining for.
  */
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) {
@@ -61,7 +63,6 @@ async function shutdown(signal: string): Promise<void> {
 
   try {
     await server.stop();
-    await closeORM();
     logger.info("shutdown complete", { signal });
     process.exit(0);
   } catch (err) {

@@ -1,26 +1,33 @@
-/** Postgres SQLSTATE for unique_violation. */
-export const PG_UNIQUE_VIOLATION_CODE = "23505";
-
 /**
- * True for a unique-constraint violation, with the constraint name if
- * Postgres reported one.
+ * DynamoDB has no SQLSTATE. A failed uniqueness guard arrives as a named
+ * exception from a ConditionExpression, which is what replaces Postgres's
+ * `23505` here.
  *
- * TRAP -- deliberately NOT `instanceof UniqueConstraintViolationException`.
- * A monorepo routinely ends up with two on-disk copies of @mikro-orm/core
- * (this package's own dependency, plus the one @mikro-orm/postgresql resolves
- * internally). The class the driver throws and the class you imported are
- * then two different constructor functions even at identical versions, and
- * `instanceof` silently returns false -- so the 409 you wrote never fires and
- * the caller gets a 500 instead.
- *
- * `code` and `constraint` are plain properties MikroORM copies off the
- * underlying pg error, so they survive regardless of which copy of the class
- * did the wrapping. Match on those.
+ * Matched on `name`, not `instanceof`, for the same reason the Postgres
+ * version matched on `code`: two copies of the AWS SDK on disk mean the class
+ * the client throws and the class you imported can be different constructors,
+ * and `instanceof` then silently returns false. `name` is a plain string
+ * property and survives that.
  */
-export function isUniqueViolation(err: unknown): err is { code: string; constraint?: string } {
+export function isConditionalCheckFailed(err: unknown): boolean {
   return (
     typeof err === "object" &&
     err !== null &&
-    (err as { code?: unknown }).code === PG_UNIQUE_VIOLATION_CODE
+    (err as { name?: unknown }).name === "ConditionalCheckFailedException"
   );
+}
+
+/**
+ * Thrown by a repository when a lock item already exists.
+ *
+ * Uniqueness is enforced by a conditional write on a dedicated lock item, NOT
+ * by a constraint the database owns, so the failure has to travel as a domain
+ * error rather than being recognised from a driver code at the edge. See
+ * `createUserRepository` for the write sequence and what it costs.
+ */
+export class UniqueConstraintError extends Error {
+  constructor(readonly field: string) {
+    super(`${field} already in use`);
+    this.name = "UniqueConstraintError";
+  }
 }

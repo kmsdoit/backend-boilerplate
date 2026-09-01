@@ -7,7 +7,7 @@ Guidance for Claude Code (claude.ai/code) working in this repository.
 Bun workspace. Run everything from the repository root.
 
 ```bash
-bun run setup               # install + database + migrate + seed
+bun run setup               # install + ScyllaDB + provision + seed
 bun run dev                 # backend (:3000)
 bun run verify              # lint + format:check + typecheck + test -- the gate
 
@@ -97,13 +97,10 @@ only under `if (body.x !== undefined)`.
 Each of these has caused a real bug. Full detail is in README.md and at each site.
 
 - `instanceof` on MikroORM exceptions silently fails — match `err.code === "23505"`.
-- `db:generate` tries to drop the partial unique index; the `@Index({ expression })`
-  on `User` is what stops it. Read every generated migration.
-- `migrations/.snapshot-*.json` is committed on purpose -- it is what `db:generate`
-  diffs against. Delete it and a fresh clone regenerates the whole schema as a
-  duplicate migration. Its filename tracks the database name.
-- Shutdown order is load-bearing: stop the listener, drain, THEN close the pool.
-  Closing the pool first kills the requests you are draining for.
+- The list partition is a single key (`gsi1pk = "USER"`), which is a hot
+  partition at scale. Shard it before relying on the list endpoint under load.
+- `status` is a FilterExpression applied after the index read, so a page can be
+  shorter than `limit` while more items remain.
 - Adding a workspace package means touching `backend/Dockerfile`, root
   `package.json` (`workspaces`, `typecheck:*`, **and `test:unit`**),
   `vitest.config.ts`, and CI. A project missing from `vitest.config.ts` never runs.
@@ -112,20 +109,26 @@ Each of these has caused a real bug. Full detail is in README.md and at each sit
 - zod v4 `.default({})` does not fill inner defaults; write them out fully.
 - Bun does not hoist to the root `node_modules`; that is normal.
 
-## Operational invariants
+## Data layer
 
-- **Index the emitted query.** Run `explain (analyze)` on what the repository
-  actually sends before adding an index. `GET /users` unfiltered was a seq scan
-  (12.2ms/200k rows) until `users_active_created_at_index` matched its real
-  shape (0.027ms).
-- **An HTTP timeout does not cancel a query** — `statementTimeoutMs` on the
-  connection is what does. Keep it above `server.requestTimeoutMs`.
-- **Never log a token.** hono's JWT errors embed the token in the message; use
-  `redactTokens` before logging anything derived from an auth error.
-- **`CREATE INDEX` blocks writes.** Fine on an empty table, an outage on a live
-  one. Use `CONCURRENTLY` (and disable the migration's transaction) for a
-  populated table.
-- `pool.max` × replicas must stay under Postgres `max_connections`.
+DynamoDB via the AWS SDK; ScyllaDB's Alternator locally, real DynamoDB in AWS.
+Only `dynamo.endpoint` differs.
+
+- **Keys are the schema.** Every key string lives in
+  `packages/database/src/keys.ts`. There is no ALTER TABLE -- changing a layout
+  means rewriting every item -- so decide access patterns before attributes.
+- **Sparse GSI for soft delete.** An item is in `gsi1` only while it has
+  `gsi1pk`/`gsi1sk`; soft delete REMOVEs both, so it leaves every list query
+  with no FilterExpression and no wasted reads.
+- **Uniqueness is a lock item plus `attribute_not_exists`, not a constraint.**
+  `TransactWriteItems` is NOT implemented by Alternator, so the write is two
+  conditional puts with a compensating delete. Do not "simplify" it to a
+  transaction while Scylla is a target.
+- **No `total`, ever.** Counting reads every matching item. Lists return
+  `nextCursor`; its absence is the only end-of-list signal.
+- **Match SDK errors on `err.name`**, never `instanceof` -- two SDK copies on
+  disk make the thrown and imported classes different constructors.
+- Pin `scylladb/scylla:latest`; GSI queries crash the server on 6.2.
 
 ## Conventions
 

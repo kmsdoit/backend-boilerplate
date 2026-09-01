@@ -13,8 +13,13 @@ server:
     windowSeconds: 60
     maxWrites: 30
 
-database:
-  url: postgresql://app:local_password@localhost:5433/app
 
 auth:
   jwtSecret: local-development-only-secret-at-least-32-chars
+
+dynamo:
+  endpoint: http://localhost:8000
+  region: us-east-1
+  tableName: app
+  accessKeyId: local
+  secretAccessKey: local

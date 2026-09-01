@@ -16,10 +16,14 @@ server:
     windowSeconds: 60
     maxWrites: 30
 
-database:
-  url: ${DATABASE_URL}
 
 auth:
   jwtSecret: ${JWT_SECRET}
   issuer: ${JWT_ISSUER}
   audience: ${JWT_AUDIENCE}
+
+# No `endpoint`: the SDK resolves the real DynamoDB endpoint for the region.
+# No credentials: the task or instance role supplies them.
+dynamo:
+  region: ${AWS_REGION}
+  tableName: ${DYNAMO_TABLE_NAME}

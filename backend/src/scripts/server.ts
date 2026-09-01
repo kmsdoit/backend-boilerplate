@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { logger } from "@app/observability";
 
-import { tableExists } from "@app/database";
+import { tablesReady } from "@app/database";
 
 import app from "../api/hono.ts";
 import { env } from "../lib/env.ts";
@@ -9,13 +9,13 @@ import { env } from "../lib/env.ts";
 process.title = `${env.SERVICE_NAME}:api`;
 
 /**
- * Fail fast on a missing table. There is no connection to open -- the SDK is
+ * Fail fast on missing tables. There is no connection to open -- the SDK is
  * lazy and stateless -- so without this check a misconfigured endpoint or table
  * name is not discovered until a user hits an endpoint, by which point the
  * process has already passed its startup probe and been sent traffic.
  */
-if (!(await tableExists())) {
-  logger.error("table is missing or not ACTIVE; run `bun run db:provision`");
+if (!(await tablesReady())) {
+  logger.error("tables are missing or not ACTIVE; run `bun run db:provision`");
   process.exit(1);
 }
 

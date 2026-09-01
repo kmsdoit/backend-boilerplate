@@ -8,20 +8,20 @@ import { checkReadiness } from "./health.ts";
  * a real timeout.
  */
 describe("checkReadiness", () => {
-  it("reports ok when the table is ACTIVE", async () => {
-    const result = await checkReadiness({ checkTable: async () => true });
+  it("reports ok when every table is ACTIVE", async () => {
+    const result = await checkReadiness({ checkTables: async () => true });
     expect(result).toEqual({ ok: true, checks: [{ name: "dynamo", ok: true }] });
   });
 
-  it("reports not-ok when the table is missing", async () => {
-    const result = await checkReadiness({ checkTable: async () => false });
+  it("reports not-ok when a table is missing", async () => {
+    const result = await checkReadiness({ checkTables: async () => false });
     expect(result.ok).toBe(false);
     expect(result.checks[0]?.error).toMatch(/missing or not ACTIVE/);
   });
 
   it("reports the failure message when the endpoint is unreachable", async () => {
     const result = await checkReadiness({
-      checkTable: async () => {
+      checkTables: async () => {
         throw new Error("ECONNREFUSED");
       },
     });
@@ -33,7 +33,7 @@ describe("checkReadiness", () => {
   // response to time out on.
   it("gives up on a hung call instead of waiting forever", async () => {
     const result = await checkReadiness({
-      checkTable: () => new Promise(() => {}),
+      checkTables: () => new Promise(() => {}),
       timeoutMs: 20,
     });
     expect(result.ok).toBe(false);

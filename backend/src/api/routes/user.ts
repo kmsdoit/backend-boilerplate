@@ -4,20 +4,16 @@ import {
   paginationQueryShape,
   updateUserSchema,
 } from "@app/contracts";
-import { UniqueConstraintError } from "@app/database";
-
 import { route, routes } from "../../lib/app-context.ts";
-import { createUserRepository } from "../../user/user-repository.ts";
+import { userRepository } from "../../user/user-repository.ts";
 import { toUserResponse } from "../../user/user-response.ts";
 import { CannotModifySelf, UserEmailTaken, UserNotFound } from "./errors.ts";
-
-const users = createUserRepository();
 
 export const userRoutes = routes(
   route("/users", "GET", {
     query: { ...paginationQueryShape, ...listUsersQueryShape },
     handler: async ({ query, c }) => {
-      const page = await users.list(query);
+      const page = await userRepository.list(query);
 
       // No `total`: counting means reading every matching item. The absence of
       // `nextCursor` is the only "you have reached the end" signal.
@@ -30,7 +26,7 @@ export const userRoutes = routes(
 
   route("/users/:id", "GET", {
     handler: async ({ params, c }) => {
-      const user = await users.findById(params.id);
+      const user = await userRepository.findById(params.id);
 
       if (!user) {
         throw UserNotFound();
@@ -43,18 +39,18 @@ export const userRoutes = routes(
   route("/users", "POST", {
     body: createUserSchema,
     handler: async ({ body, c }) => {
-      try {
-        // The id is generated here, not by the store: DynamoDB has no
-        // sequences, and a client-chosen key is what lets the write be a single
-        // conditional Put instead of a read-then-write.
-        const user = await users.create({ id: crypto.randomUUID(), ...body });
-        return c.json(toUserResponse(user), 201);
-      } catch (err) {
-        if (err instanceof UniqueConstraintError) {
-          throw UserEmailTaken();
-        }
-        throw err;
+      // The id is generated here, not by the store: DynamoDB has no sequences,
+      // and a client-chosen key is what lets the write be a single conditional
+      // Put instead of a read-then-write.
+      const user = await userRepository.create({ id: crypto.randomUUID(), ...body });
+
+      // null, not an exception: losing the race for an email address is an
+      // ordinary outcome, not an error condition.
+      if (!user) {
+        throw UserEmailTaken();
       }
+
+      return c.json(toUserResponse(user), 201);
     },
   }),
 
@@ -65,7 +61,7 @@ export const userRoutes = routes(
         throw CannotModifySelf();
       }
 
-      const user = await users.update(params.id, body);
+      const user = await userRepository.update(params.id, body);
 
       if (!user) {
         throw UserNotFound();
@@ -81,7 +77,7 @@ export const userRoutes = routes(
         throw CannotModifySelf();
       }
 
-      const deleted = await users.softDelete(params.id);
+      const deleted = await userRepository.softDelete(params.id);
 
       if (!deleted) {
         throw UserNotFound();

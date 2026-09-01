@@ -1,6 +1,6 @@
 import type { UserRole, UserStatus } from "@app/contracts";
 
-import type { UserRecord } from "./user-repository.ts";
+import type { UserRow } from "@app/database";
 
 export type UserResponse = {
   id: string;
@@ -16,11 +16,11 @@ export type UserResponse = {
  * The one place a user becomes a response body.
  *
  * It matters more here than with a relational mapper: a DynamoDB item is a bag
- * of attributes, so `pk`, `gsi1pk`, `gsi1sk` and `deletedAt` would all be
+ * of attributes, so `listPartition`, `listSortKey` and `deletedAt` would all be
  * serialised straight to the client by an accidental `c.json(item)`. Listing
  * fields explicitly is what stops key layout from becoming public API.
  */
-export function toUserResponse(user: UserRecord): UserResponse {
+export function toUserResponse(user: UserRow): UserResponse {
   return {
     id: user.id,
     email: user.email,

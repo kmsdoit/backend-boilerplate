@@ -26,4 +26,4 @@ auth:
 # No credentials: the task or instance role supplies them.
 dynamo:
   region: ${AWS_REGION}
-  tableName: ${DYNAMO_TABLE_NAME}
+  tableNamePrefix: ${DYNAMO_TABLE_PREFIX}

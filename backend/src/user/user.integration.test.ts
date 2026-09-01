@@ -7,12 +7,11 @@
  * Needs the test node (`bun run test:db:up`); the table is provisioned by the
  * preflight.
  */
-import { DeleteCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { sign } from "hono/jwt";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { applicationConfig } from "@app/config";
-import { GSI1, USER_LIST_PARTITION, doc, tableName } from "@app/database";
+import { tables } from "@app/database";
 
 import app from "../api/hono.ts";
 
@@ -48,23 +47,16 @@ async function request(
 }
 
 /**
- * There is no TRUNCATE in DynamoDB -- deleting means enumerating keys. Only
- * live users are in the index, which is enough to isolate these tests, and
- * doing it through the same index the API reads keeps the helper honest.
+ * There is no TRUNCATE in DynamoDB -- clearing means enumerating keys.
+ * `scanAll` is the right tool here and the wrong one in a request handler,
+ * which is why DdbTable exposes it but nothing under routes/ calls it.
  */
 async function clearUsers(): Promise<void> {
-  const result = await doc.send(
-    new QueryCommand({
-      TableName: tableName,
-      IndexName: GSI1,
-      KeyConditionExpression: "gsi1pk = :p",
-      ExpressionAttributeValues: { ":p": USER_LIST_PARTITION },
-    }),
-  );
-
-  for (const item of (result.Items ?? []) as { pk: string; email: string }[]) {
-    await doc.send(new DeleteCommand({ TableName: tableName, Key: { pk: item.pk } }));
-    await doc.send(new DeleteCommand({ TableName: tableName, Key: { pk: `EMAIL#${item.email}` } }));
+  for (const user of await tables.users.scanAll()) {
+    await tables.users.delete({ id: user.id });
+  }
+  for (const claim of await tables.userEmails.scanAll()) {
+    await tables.userEmails.delete({ email: claim.email });
   }
 }
 
@@ -119,7 +111,7 @@ describe("users CRUD", () => {
       "updatedAt",
     ]);
     // The table layout must never become public API.
-    for (const internal of ["pk", "gsi1pk", "gsi1sk", "deletedAt"]) {
+    for (const internal of ["listPartition", "listSortKey", "deletedAt"]) {
       expect(body).not.toHaveProperty(internal);
     }
   });

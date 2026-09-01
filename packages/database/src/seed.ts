@@ -2,20 +2,22 @@
 /**
  * Idempotent development seed: `bun run db:seed`.
  *
- * Idempotent matters -- a seed you can only run against an empty table is a
- * seed nobody runs. A conditional Put makes re-running a no-op instead of an
- * error, and does it in one round trip rather than read-then-write.
+ * Idempotent matters -- a seed you can only run against empty tables is a seed
+ * nobody runs. Fixed ids mean re-running overwrites the same two rows instead
+ * of accumulating duplicates.
  */
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
-
 import { applicationConfig } from "@app/config";
 
-import { doc, tableName } from "./client.ts";
-import { emailKey, listSortKey, userKey, USER_LIST_PARTITION } from "./keys.ts";
-import { isConditionalCheckFailed } from "./errors.ts";
-import { provisionTable } from "./table.ts";
+import { provisionTables } from "./provisioning.ts";
+import { USER_LIST_PARTITION, tables, type UserRow } from "./tables.ts";
 
-const SEED_USERS = [
+if (applicationConfig.application.environment === "production") {
+  throw new Error("Refusing to seed production tables.");
+}
+
+await provisionTables();
+
+const SEED_USERS: Pick<UserRow, "id" | "email" | "name" | "role">[] = [
   {
     id: "00000000-0000-4000-8000-000000000001",
     email: "admin@example.com",
@@ -30,45 +32,18 @@ const SEED_USERS = [
   },
 ];
 
-if (applicationConfig.application.environment === "production") {
-  throw new Error("Refusing to seed a production table.");
-}
-
-await provisionTable();
-
-for (const user of SEED_USERS) {
+for (const seed of SEED_USERS) {
   const now = new Date().toISOString();
-  try {
-    await doc.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: { pk: emailKey(user.email), userId: user.id },
-        ConditionExpression: "attribute_not_exists(pk)",
-      }),
-    );
-  } catch (err) {
-    if (!isConditionalCheckFailed(err)) {
-      throw err;
-    }
-  }
-
-  // Fixed ids, so re-seeding overwrites the same two items rather than
-  // accumulating duplicates every run.
-  await doc.send(
-    new PutCommand({
-      TableName: tableName,
-      Item: {
-        pk: userKey(user.id),
-        ...user,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-        gsi1pk: USER_LIST_PARTITION,
-        gsi1sk: listSortKey(now, user.id),
-      },
-    }),
-  );
-  console.log(`seeded ${user.email}`);
+  await tables.userEmails.putIfAbsent({ email: seed.email, userId: seed.id }, "email");
+  await tables.users.put({
+    ...seed,
+    status: "active",
+    createdAt: now,
+    updatedAt: now,
+    listPartition: USER_LIST_PARTITION,
+    listSortKey: `${now}#${seed.id}`,
+  });
+  console.log(`seeded ${seed.email}`);
 }
 
-console.log(`table "${tableName}" ready`);
+console.log(`${applicationConfig.application.name} ready`);

@@ -1,18 +1,17 @@
 /**
  * Vitest globalSetup for the database-backed projects.
  *
- * WHY THIS EXISTS: without it, forgetting to provision the table produces a
- * wall of `ResourceNotFoundException` failures that read like a broken suite
- * rather than a missing setup step.
+ * WHY THIS EXISTS: without it, forgetting to provision produces a wall of
+ * `ResourceNotFoundException` failures that read like a broken suite rather
+ * than a missing setup step.
  *
  * Provisions automatically, but ONLY against a config whose environment is
- * `test`. A test command must never create or touch a development or
- * production table.
+ * `test`. A test command must never create or touch development or production
+ * tables.
  */
 import { applicationConfig } from "@app/config";
 
-import { tableName } from "./client.ts";
-import { provisionTable } from "./table.ts";
+import { provisionTables } from "./provisioning.ts";
 
 export async function setup(): Promise<void> {
   if (applicationConfig.application.environment !== "test") {
@@ -22,16 +21,16 @@ export async function setup(): Promise<void> {
     );
   }
 
-  const endpoint = applicationConfig.dynamo.endpoint ?? applicationConfig.dynamo.region;
+  const target = applicationConfig.dynamo.endpoint ?? applicationConfig.dynamo.region;
 
   try {
-    const result = await provisionTable();
-    if (result === "created") {
-      console.log(`[preflight] created table "${tableName}"`);
+    const created = await provisionTables();
+    if (created.length > 0) {
+      console.log(`[preflight] created ${created.join(", ")}`);
     }
   } catch (err) {
     throw new Error(
-      `Cannot reach the test database at ${endpoint}\n` +
+      `Cannot reach the test database at ${target}\n` +
         `  ${err instanceof Error ? err.message : String(err)}\n\n` +
         `Start it with:  bun run test:db:up`,
     );

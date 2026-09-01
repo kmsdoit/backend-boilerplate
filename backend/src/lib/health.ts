@@ -1,4 +1,4 @@
-import { tableExists } from "@app/database";
+import { tablesReady } from "@app/database";
 
 /**
  * Readiness budget. Must stay comfortably under the orchestrator's own probe
@@ -12,7 +12,7 @@ export type ReadinessResult = { ok: boolean; checks: ReadinessCheck[] };
 
 /** Injected for tests: a fake that never resolves proves the timeout fires without a socket. */
 type ReadinessOverrides = {
-  checkTable?: () => Promise<boolean>;
+  checkTables?: () => Promise<boolean>;
   timeoutMs?: number;
 };
 
@@ -39,19 +39,19 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 /**
  * DescribeTable, not a read of real data: it confirms credentials resolve, the
- * endpoint is reachable and the table is ACTIVE, without depending on any item
- * existing. A probe that queries actual rows fails for reasons that have
+ * endpoint is reachable and every table is ACTIVE, without depending on any
+ * item existing. A probe that queries actual rows fails for reasons that have
  * nothing to do with this instance's health.
  */
 async function checkTable(overrides: ReadinessOverrides = {}): Promise<ReadinessCheck> {
-  const probe = overrides.checkTable ?? tableExists;
+  const probe = overrides.checkTables ?? tablesReady;
   const timeoutMs = overrides.timeoutMs ?? READINESS_TIMEOUT_MS;
 
   try {
     const ok = await withTimeout(probe(), timeoutMs, "dynamo");
     return ok
       ? { name: "dynamo", ok: true }
-      : { name: "dynamo", ok: false, error: "table is missing or not ACTIVE" };
+      : { name: "dynamo", ok: false, error: "one or more tables are missing or not ACTIVE" };
   } catch (err) {
     return { name: "dynamo", ok: false, error: err instanceof Error ? err.message : String(err) };
   }

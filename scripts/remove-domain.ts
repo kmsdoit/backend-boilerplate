@@ -29,19 +29,7 @@ const pascal = rawName.replace(/(^|-)([a-z])/g, (_, __, c: string) => c.toUpperC
 const camel = pascal.charAt(0).toLowerCase() + pascal.slice(1);
 const plural = `${rawName}s`;
 const upper = rawName.replace(/-/g, "_").toUpperCase();
-
-/**
- * keys.ts re-exports every domain's helpers on one line, so removing a domain
- * means rewriting that line rather than deleting it. Reading the file after the
- * block above has gone is the simplest way to get it right.
- */
-function keysExportLine(): string {
-  const keysPath = resolve(root, "packages/database/src/keys.ts");
-  const exported = [...readFileSync(keysPath, "utf8").matchAll(/^export const (\w+)/gm)]
-    .map((match) => match[1])
-    .filter((name) => name !== undefined);
-  return exported.length > 0 ? `export { ${exported.join(", ")} } from "./keys.ts";\n` : "";
-}
+const pluralCamel = `${camel}s`;
 
 const files = [
   `packages/contracts/src/${rawName}.ts`,
@@ -90,14 +78,29 @@ function unwire(relativePath: string, rules: [RegExp, string?][]): void {
 unwire("packages/contracts/src/index.ts", [
   [new RegExp(`export \\{[^}]*\\} from "\\./${rawName}\\.ts";\\n`, "g")],
 ]);
-// Key helpers live in the shared keys.ts -- one screen for the whole table
-// layout -- inside a `// domain:<name>` ... `// /domain:<name>` block, so the
-// whole block comes out in one edit no matter what extra helpers it holds.
-unwire("packages/database/src/keys.ts", [
-  [new RegExp(`\\n?// domain:${rawName}\\n[\\s\\S]*?// /domain:${rawName}\\n`, "g")],
-]);
-unwire("packages/database/src/index.ts", [
-  [new RegExp(`export \\{[^}]*\\} from "\\./keys\\.ts";\\n`, "g"), keysExportLine],
+// The row type, the table definition and the handle all live in tables.ts.
+//
+// The patterns match `<Pascal>*Row` / `<camel>*TableDefinition` rather than
+// exact names, because a domain may own more than one table -- the bundled
+// example has `UserRow` and `UserEmailRow` -- and leaving the second one
+// behind provisions a table nothing reads.
+unwire("packages/database/src/tables.ts", [
+  [
+    new RegExp(
+      `\\n?/\\*\\*[^*]*\\*/\\n?export type ${pascal}\\w*Row = \\{[\\s\\S]*?\\n\\};\\n`,
+      "g",
+    ),
+  ],
+  [new RegExp(`\\n?export type ${pascal}\\w*Row = \\{[\\s\\S]*?\\n\\};\\n`, "g")],
+  [new RegExp(`\\n?/\\*\\* The one partition[^\\n]*\\n`, "g")],
+  [new RegExp(`export const ${upper}\\w*_LIST_PARTITION = [^\\n]*\\n`, "g")],
+  [
+    new RegExp(
+      `\\n?const ${camel}\\w*TableDefinition: TableDefinition = \\{[\\s\\S]*?\\n\\};\\n`,
+      "g",
+    ),
+  ],
+  [new RegExp(`^\\s*\\w+: new DdbTable<${pascal}\\w*Row,[^\\n]*\\n`, "gm")],
 ]);
 unwire("backend/src/api/routes/index.ts", [
   [new RegExp(`.*from "\\./${rawName}\\.ts";\\n`, "g")],
@@ -139,28 +142,24 @@ if (
 /**
  * Idempotent development seed: \`bun run db:seed\`.
  *
- * Idempotent matters -- a seed you can only run against an empty table is a
- * seed nobody runs. A conditional Put makes re-running a no-op instead of an
- * error, and does it in one round trip rather than read-then-write.
+ * Idempotent matters -- a seed you can only run against empty tables is a seed
+ * nobody runs. Fixed ids mean re-running overwrites the same rows instead of
+ * accumulating duplicates.
  */
 import { applicationConfig } from "@app/config";
 
-import { tableName } from "./client.ts";
-import { provisionTable } from "./table.ts";
+import { provisionTables } from "./provisioning.ts";
 
 if (applicationConfig.application.environment === "production") {
-  throw new Error("Refusing to seed a production table.");
+  throw new Error("Refusing to seed production tables.");
 }
 
-await provisionTable();
+await provisionTables();
 
 // Seed your domains here, e.g.:
-//   await doc.send(new PutCommand({
-//     TableName: tableName,
-//     Item: { pk: orderKey("demo"), id: "demo", name: "Demo", ... },
-//   }));
+//   await tables.orders.put({ id: "demo", name: "Demo", ... });
 
-console.log(\`table "\${tableName}" ready\`);
+console.log(\`\${applicationConfig.application.name} ready\`);
 `,
   );
   console.log("  reset    packages/database/src/seed.ts (it seeded this domain)");

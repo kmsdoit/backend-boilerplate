@@ -114,9 +114,16 @@ Each of these has caused a real bug. Full detail is in README.md and at each sit
 DynamoDB via the AWS SDK; ScyllaDB's Alternator locally, real DynamoDB in AWS.
 Only `dynamo.endpoint` differs.
 
-- **Keys are the schema.** Every key string lives in
-  `packages/database/src/keys.ts`. There is no ALTER TABLE -- changing a layout
-  means rewriting every item -- so decide access patterns before attributes.
+- **One table per entity, natural keys, declared once.** `packages/database/src/tables.ts`
+  holds the row type, the `TableDefinition` and the typed `DdbTable` handle;
+  provisioning reads the same definition, so infrastructure and access cannot
+  drift. There is no ALTER TABLE -- changing a KEY means rewriting every item --
+  so decide access patterns before attributes.
+- **No DynamoDB command outside `DdbTable`.** Repositories call `get`/`put`/
+  `updateIf`/`queryPage`; they never build a `GetCommand`. Add a method to
+  `DdbTable` rather than reaching for the SDK in a repository.
+- **Partition by owner where ownership exists** (`{ userId, id }`): that makes
+  "this user's X" a plain partition read needing no index.
 - **Sparse GSI for soft delete.** An item is in `gsi1` only while it has
   `gsi1pk`/`gsi1sk`; soft delete REMOVEs both, so it leaves every list query
   with no FilterExpression and no wasted reads.

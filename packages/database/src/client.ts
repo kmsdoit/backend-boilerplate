@@ -10,12 +10,9 @@ import { applicationConfig } from "@app/config";
  * credential resolution and keeps HTTP connections alive. In Lambda this is
  * what makes a warm invocation fast, so it must live at module scope, outside
  * any handler.
- *
- * Nothing here is DynamoDB-specific beyond the endpoint. Point `dynamo.endpoint`
- * at ScyllaDB's Alternator locally, drop it in AWS, and this file does not
- * change -- that portability is the reason the stack was chosen.
  */
-const { endpoint, region, accessKeyId, secretAccessKey } = applicationConfig.dynamo;
+const { endpoint, region, accessKeyId, secretAccessKey, tableNamePrefix } =
+  applicationConfig.dynamo;
 
 const client = new DynamoDBClient({
   region,
@@ -28,15 +25,23 @@ const client = new DynamoDBClient({
 
 /**
  * The Document client, not the raw one: it marshals plain JavaScript values to
- * and from DynamoDB's `{"S": "..."}` attribute-value shape. Using the raw
- * client means writing that shape by hand at every call site.
+ * and from DynamoDB's `{"S": "..."}` attribute-value shape.
  */
 export const doc = DynamoDBDocumentClient.from(client, {
   marshallOptions: {
     // A property set to undefined means "no value", not "store a null".
     removeUndefinedValues: true,
+    convertClassInstanceToMap: false,
   },
 });
 
 export const rawClient = client;
-export const tableName = applicationConfig.dynamo.tableName;
+
+/**
+ * Physical table name for a logical entity.
+ *
+ * The prefix is what lets dev, test and production share an AWS account
+ * without colliding, and it is why the test config can point at its own set of
+ * tables on the same node.
+ */
+export const tableNameFor = (entity: string) => `${tableNamePrefix}-${entity}`;

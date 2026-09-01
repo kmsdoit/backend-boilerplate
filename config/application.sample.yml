@@ -62,6 +62,6 @@ auth:
 dynamo:
   endpoint: http://localhost:8000
   region: us-east-1
-  tableName: app
+  tableNamePrefix: app
   accessKeyId: local
   secretAccessKey: local

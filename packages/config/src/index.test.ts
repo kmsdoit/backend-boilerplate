@@ -34,7 +34,7 @@ describe("sample and production config", () => {
     Object.assign(process.env, {
       CORS_ORIGINS: "https://app.example.com,https://admin.example.com",
       AWS_REGION: "ap-northeast-2",
-      DYNAMO_TABLE_NAME: "app",
+      DYNAMO_TABLE_PREFIX: "app",
       JWT_SECRET: "a-production-secret-that-is-at-least-32-chars",
       JWT_ISSUER: "https://auth.example.com",
       JWT_AUDIENCE: "backend-boilerplate",
@@ -61,7 +61,7 @@ describe("sample and production config", () => {
     delete process.env.AWS_REGION;
     Object.assign(process.env, {
       CORS_ORIGINS: "https://app.example.com",
-      DYNAMO_TABLE_NAME: "app",
+      DYNAMO_TABLE_PREFIX: "app",
       JWT_SECRET: "a-production-secret-that-is-at-least-32-chars",
       JWT_ISSUER: "https://auth.example.com",
       JWT_AUDIENCE: "backend-boilerplate",
@@ -110,7 +110,7 @@ describe("schema defaults", () => {
   it("fills nested server defaults when the section is omitted", () => {
     const config = applicationConfigSchema.parse({
       application: { name: "x", environment: "test" },
-      dynamo: { tableName: "x" },
+      dynamo: { tableNamePrefix: "x" },
       auth: { jwtSecret: "a-secret-value-that-is-at-least-32-characters" },
     });
 
@@ -122,7 +122,7 @@ describe("schema defaults", () => {
   it("keeps requestTimeoutMs resolved in the server default", () => {
     const config = applicationConfigSchema.parse({
       application: { name: "x", environment: "test" },
-      dynamo: { tableName: "x" },
+      dynamo: { tableNamePrefix: "x" },
       auth: { jwtSecret: "a-secret-value-that-is-at-least-32-characters" },
     });
 
@@ -132,7 +132,7 @@ describe("schema defaults", () => {
   it("rejects a jwtSecret shorter than 32 characters", () => {
     const result = applicationConfigSchema.safeParse({
       application: { name: "x", environment: "test" },
-      dynamo: { tableName: "x" },
+      dynamo: { tableNamePrefix: "x" },
       auth: { jwtSecret: "too-short" },
     });
 
@@ -143,7 +143,7 @@ describe("schema defaults", () => {
 describe("production guards", () => {
   const productionBase = {
     application: { name: "x", environment: "production" as const },
-    dynamo: { tableName: "x" },
+    dynamo: { tableNamePrefix: "x" },
     server: { corsOrigins: ["https://app.example.com"] },
   };
 
@@ -214,7 +214,7 @@ describe("config source precedence", () => {
       "  name: from-env",
       "  environment: test",
       "dynamo:",
-      "  tableName: from-env",
+      "  tableNamePrefix: from-env",
       "auth:",
       "  jwtSecret: an-env-supplied-secret-of-at-least-32-chars",
     ].join("\n");
@@ -223,7 +223,7 @@ describe("config source precedence", () => {
     const { applicationConfig: loaded } = await import("./index.ts");
 
     expect(loaded.application.name).toBe("from-env");
-    expect(loaded.dynamo.tableName).toBe("from-env");
+    expect(loaded.dynamo.tableNamePrefix).toBe("from-env");
   });
 
   it("still resolves ${ENV} placeholders inside APP_CONFIG", async () => {
@@ -233,7 +233,7 @@ describe("config source precedence", () => {
       "  name: from-env",
       "  environment: test",
       "dynamo:",
-      "  tableName: ${PLACEHOLDER_TABLE}",
+      "  tableNamePrefix: ${PLACEHOLDER_TABLE}",
       "auth:",
       "  jwtSecret: an-env-supplied-secret-of-at-least-32-chars",
     ].join("\n");
@@ -241,7 +241,7 @@ describe("config source precedence", () => {
     vi.resetModules();
     const { applicationConfig: loaded } = await import("./index.ts");
 
-    expect(loaded.dynamo.tableName).toBe("substituted");
+    expect(loaded.dynamo.tableNamePrefix).toBe("substituted");
     delete process.env.PLACEHOLDER_TABLE;
   });
 });

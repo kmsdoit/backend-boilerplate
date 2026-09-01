@@ -110,8 +110,14 @@ const baseApplicationConfigSchema = z.object({
      */
     endpoint: z.string().min(1).optional(),
     region: z.string().min(1).default("us-east-1"),
-    /** Single table for the whole service; entities are separated by key prefix. */
-    tableName: z.string().min(1),
+    /**
+     * Prefix for every physical table name (`<prefix>-users`). One table per
+     * entity, rather than one shared table with prefixed keys: the key shape
+     * then IS the table's type, so a wrong key is a compile error instead of a
+     * runtime ValidationException, and an ownership query
+     * ("this user's orders") is a plain partition read needing no index.
+     */
+    tableNamePrefix: z.string().min(1),
     /**
      * Alternator ignores credentials unless started with
      * --alternator-enforce-authorization, but the AWS SDK refuses to sign a

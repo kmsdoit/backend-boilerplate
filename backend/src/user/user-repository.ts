@@ -1,104 +1,62 @@
-import {
-  DeleteCommand,
-  GetCommand,
-  PutCommand,
-  QueryCommand,
-  UpdateCommand,
-} from "@aws-sdk/lib-dynamodb";
-
-import type { Page, PaginationQuery, UserRole, UserStatus } from "@app/contracts";
-import {
-  GSI1,
-  USER_LIST_PARTITION,
-  UniqueConstraintError,
-  decodeCursor,
-  doc,
-  emailKey,
-  encodeCursor,
-  isConditionalCheckFailed,
-  listSortKey,
-  tableName,
-  userKey,
-} from "@app/database";
-
-export type UserRecord = {
-  id: string;
-  email: string;
-  name: string;
-  role: UserRole;
-  status: UserStatus;
-  createdAt: string;
-  updatedAt: string;
-  deletedAt?: string;
-};
+import type { PaginationQuery, UserRole, UserStatus } from "@app/contracts";
+import { USER_LIST_PARTITION, tables, type Page, type UserRow } from "@app/database";
 
 export type ListUsersFilter = PaginationQuery & {
   status?: UserStatus;
 };
 
-type UserItem = UserRecord & { pk: string; gsi1pk?: string; gsi1sk?: string };
-
 /**
- * All access to users, in one place. Every key string comes from
- * `@app/database`'s keys.ts, so the table layout stays readable in one screen.
+ * All access to users. Notice there is not a single DynamoDB command in this
+ * file: `DdbTable` owns command construction, the casts, and the
+ * ConditionalCheckFailed translation, so a repository reads as domain logic.
+ *
+ * Tables are injected rather than imported, so a test can hand this fakes.
  */
-export function createUserRepository() {
-  async function findById(id: string): Promise<UserRecord | null> {
-    const result = await doc.send(
-      new GetCommand({ TableName: tableName, Key: { pk: userKey(id) } }),
-    );
-    const item = result.Item as UserItem | undefined;
+export class UserRepository {
+  constructor(
+    private readonly users = tables.users,
+    private readonly emails = tables.userEmails,
+  ) {}
 
+  async findById(id: string): Promise<UserRow | null> {
+    const user = await this.users.get({ id });
     // A soft-deleted user is still addressable by primary key -- only the list
     // index drops it -- so the check has to happen here.
-    if (!item || item.deletedAt) {
-      return null;
-    }
-    return toRecord(item);
+    return user && !user.deletedAt ? user : null;
   }
 
   /**
    * Creates the user and claims its email address.
    *
    * WHY TWO WRITES AND NOT A TRANSACTION: the DynamoDB idiom is
-   * TransactWriteItems([Put user, Put email-lock]), which is atomic.
-   * ScyllaDB's Alternator does not implement TransactWriteItems (verified:
-   * `UnknownOperationException`), so this uses the pre-transaction pattern
-   * instead -- claim the lock with a conditional write, then write the user,
-   * and release the lock if that fails.
+   * TransactWriteItems([Put user, Put email claim]), which is atomic.
+   * ScyllaDB's Alternator does not implement it (verified:
+   * `UnknownOperationException`), so this uses the pre-transaction pattern --
+   * claim, write, release the claim if the write fails.
    *
-   * The residual risk is a crash in between, which leaves an orphan lock and
-   * makes that address unusable until someone deletes the item. That is the
-   * trade for code that runs unchanged on both Alternator and real DynamoDB.
-   * Once you are on AWS only, collapse these two writes into a
-   * TransactWriteItems and delete this comment.
+   * The residual risk is a crash in between, leaving an orphan claim that makes
+   * that address unusable until someone deletes the row. That is the trade for
+   * code that runs unchanged on both Alternator and real DynamoDB. Once you are
+   * on AWS only, collapse these into a TransactWriteItems.
+   *
+   * Returns null when the address is already claimed.
    */
-  async function create(input: {
+  async create(input: {
     id: string;
     email: string;
     name: string;
     role: UserRole;
-  }): Promise<UserRecord> {
+  }): Promise<UserRow | null> {
     const now = new Date().toISOString();
+    // Lowercased into the key: DynamoDB compares bytes, so without this
+    // "A@x.com" and "a@x.com" are two different users.
     const email = input.email.trim().toLowerCase();
 
-    try {
-      await doc.send(
-        new PutCommand({
-          TableName: tableName,
-          Item: { pk: emailKey(email), userId: input.id },
-          ConditionExpression: "attribute_not_exists(pk)",
-        }),
-      );
-    } catch (err) {
-      if (isConditionalCheckFailed(err)) {
-        throw new UniqueConstraintError("email");
-      }
-      throw err;
+    if (!(await this.emails.putIfAbsent({ email, userId: input.id }, "email"))) {
+      return null;
     }
 
-    const item: UserItem = {
-      pk: userKey(input.id),
+    const user: UserRow = {
       id: input.id,
       email,
       name: input.name,
@@ -106,34 +64,27 @@ export function createUserRepository() {
       status: "active",
       createdAt: now,
       updatedAt: now,
-      // Presence of these two is what puts the item in the list index.
-      gsi1pk: USER_LIST_PARTITION,
-      gsi1sk: listSortKey(now, input.id),
+      listPartition: USER_LIST_PARTITION,
+      // The id is a tiebreaker: two users created in the same millisecond would
+      // otherwise collide on the sort key.
+      listSortKey: `${now}#${input.id}`,
     };
 
     try {
-      await doc.send(
-        new PutCommand({
-          TableName: tableName,
-          Item: item,
-          ConditionExpression: "attribute_not_exists(pk)",
-        }),
-      );
+      await this.users.put(user, { conditionExpression: "attribute_not_exists(id)" });
     } catch (err) {
       // Release the claim rather than leaking it; the address stays usable.
-      await doc
-        .send(new DeleteCommand({ TableName: tableName, Key: { pk: emailKey(email) } }))
-        .catch(() => undefined);
+      await this.emails.delete({ email }).catch(() => null);
       throw err;
     }
 
-    return toRecord(item);
+    return user;
   }
 
-  async function update(
+  async update(
     id: string,
     changes: { name?: string; role?: UserRole; status?: UserStatus },
-  ): Promise<UserRecord | null> {
+  ): Promise<UserRow | null> {
     const names: Record<string, string> = { "#updatedAt": "updatedAt" };
     const values: Record<string, unknown> = { ":updatedAt": new Date().toISOString() };
     const sets = ["#updatedAt = :updatedAt"];
@@ -141,116 +92,69 @@ export function createUserRepository() {
     // Only the keys actually present are written. Assigning every field would
     // overwrite a real value with undefined on a partial PATCH.
     for (const [field, value] of Object.entries(changes)) {
-      if (value === undefined) {
-        continue;
-      }
+      if (value === undefined) continue;
       names[`#${field}`] = field;
       values[`:${field}`] = value;
       sets.push(`#${field} = :${field}`);
     }
 
-    try {
-      const result = await doc.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: { pk: userKey(id) },
-          UpdateExpression: `SET ${sets.join(", ")}`,
-          ExpressionAttributeNames: names,
-          ExpressionAttributeValues: values,
-          // Fails rather than creating a blank item: UpdateItem is an upsert by
-          // default, so without this a PATCH to a deleted id would resurrect it.
-          ConditionExpression: "attribute_exists(pk) AND attribute_not_exists(deletedAt)",
-          ReturnValues: "ALL_NEW",
-        }),
-      );
-      return toRecord(result.Attributes as UserItem);
-    } catch (err) {
-      if (isConditionalCheckFailed(err)) {
-        return null;
-      }
-      throw err;
-    }
+    return this.users.updateIf({
+      key: { id },
+      updateExpression: `SET ${sets.join(", ")}`,
+      conditionExpression: "attribute_exists(id) AND attribute_not_exists(deletedAt)",
+      expressionAttributeNames: names,
+      expressionAttributeValues: values,
+    });
   }
 
   /**
-   * Soft delete. REMOVEing the two index attributes drops the item out of every
-   * list query for free -- that is what a sparse GSI buys, versus paying to read
-   * deleted items and filter them out afterwards.
-   *
-   * The email lock is released so the address can be reused, matching the
-   * lock item, so the address becomes claimable again.
+   * Soft delete. REMOVEing the two index attributes drops the row out of every
+   * list query for free -- that is what a sparse index buys, versus paying to
+   * read deleted rows and filter them out afterwards.
    */
-  async function softDelete(id: string): Promise<UserRecord | null> {
-    const now = new Date().toISOString();
+  async softDelete(id: string): Promise<UserRow | null> {
+    const previous = await this.users.updateIf({
+      key: { id },
+      updateExpression: "SET deletedAt = :now, updatedAt = :now REMOVE listPartition, listSortKey",
+      conditionExpression: "attribute_exists(id) AND attribute_not_exists(deletedAt)",
+      expressionAttributeValues: { ":now": new Date().toISOString() },
+      returnValues: "ALL_OLD",
+    });
 
-    try {
-      const result = await doc.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: { pk: userKey(id) },
-          UpdateExpression: "SET deletedAt = :now, updatedAt = :now REMOVE gsi1pk, gsi1sk",
-          ExpressionAttributeValues: { ":now": now },
-          ConditionExpression: "attribute_exists(pk) AND attribute_not_exists(deletedAt)",
-          ReturnValues: "ALL_OLD",
-        }),
-      );
-      const previous = result.Attributes as UserItem;
-      await doc
-        .send(new DeleteCommand({ TableName: tableName, Key: { pk: emailKey(previous.email) } }))
-        .catch(() => undefined);
-      return toRecord(previous);
-    } catch (err) {
-      if (isConditionalCheckFailed(err)) {
-        return null;
-      }
-      throw err;
-    }
+    if (!previous) return null;
+
+    // Free the address, matching what a partial unique index would have done.
+    await this.emails.delete({ email: previous.email }).catch(() => null);
+    return previous;
   }
 
   /**
    * Newest first, via the sparse list index.
    *
-   * `status` is a FilterExpression, applied AFTER the index read, so a page can
-   * come back shorter than `limit` while more items remain. Callers must page
-   * until `nextCursor` is absent, never until a page looks short.
+   * `status` is a FilterExpression applied AFTER the index read, so a page can
+   * come back shorter than `limit` while more items remain. Callers page until
+   * `nextCursor` is absent, never until a page looks short.
    */
-  async function list(filter: ListUsersFilter): Promise<Page<UserRecord>> {
-    const result = await doc.send(
-      new QueryCommand({
-        TableName: tableName,
-        IndexName: GSI1,
-        KeyConditionExpression: "gsi1pk = :partition",
-        ExpressionAttributeValues: {
-          ":partition": USER_LIST_PARTITION,
-          ...(filter.status ? { ":status": filter.status } : {}),
-        },
-        ...(filter.status
-          ? {
-              FilterExpression: "#status = :status",
-              ExpressionAttributeNames: { "#status": "status" },
-            }
-          : {}),
-        // false = descending, i.e. newest first, because gsi1sk starts with an
-        // ISO-8601 timestamp.
-        ScanIndexForward: false,
-        Limit: filter.limit,
-        ExclusiveStartKey: decodeCursor(filter.cursor),
-      }),
-    );
-
-    return {
-      items: ((result.Items ?? []) as UserItem[]).map(toRecord),
-      nextCursor: encodeCursor(result.LastEvaluatedKey),
-    };
+  async list(filter: ListUsersFilter): Promise<Page<UserRow>> {
+    return this.users.queryPage({
+      indexName: "by-created-at",
+      keyConditionExpression: "listPartition = :partition",
+      expressionAttributeValues: {
+        ":partition": USER_LIST_PARTITION,
+        ...(filter.status ? { ":status": filter.status } : {}),
+      },
+      ...(filter.status
+        ? {
+            filterExpression: "#status = :status",
+            expressionAttributeNames: { "#status": "status" },
+          }
+        : {}),
+      // false = descending: the sort key starts with an ISO-8601 timestamp.
+      scanIndexForward: false,
+      limit: filter.limit,
+      cursor: filter.cursor,
+    });
   }
-
-  return { findById, create, update, softDelete, list };
 }
 
-/** Strips the key attributes; nothing above this layer should see them. */
-function toRecord(item: UserItem): UserRecord {
-  const { pk: _pk, gsi1pk: _gsi1pk, gsi1sk: _gsi1sk, ...record } = item;
-  return record;
-}
-
-export type UserRepository = ReturnType<typeof createUserRepository>;
+export const userRepository = new UserRepository();

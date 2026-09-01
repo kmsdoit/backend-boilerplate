@@ -73,7 +73,7 @@ packages/
   config/                  loads + validates the YAML. No workspace deps.
   contracts/               Zod schemas and enums. No I/O.
   observability/           logger + Prometheus primitives.
-  database/                SDK client, key layout, table provisioning, test preflight.
+  database/                DdbTable, the table registry, provisioning, test preflight.
 backend/
   src/lib/                 route DSL, hono adapter, db, env, health, metrics.
   src/middleware/          logger, auth, rate limit, error handler.
@@ -123,7 +123,7 @@ That writes five files and wires them into the index files:
 | | |
 | --- | --- |
 | `packages/contracts/src/order.ts` | Zod schemas — what a request may contain |
-| `packages/database/src/keys.ts` | key helpers for the new domain, appended in place |
+| `packages/database/src/tables.ts` | row type, table definition and typed handle, appended in place |
 | `backend/src/order/order-repository.ts` | every read and write, including the sparse-index soft delete |
 | `backend/src/order/order-response.ts` | every field that leaves |
 | `backend/src/api/routes/order.ts` | GET / GET :id / POST / PATCH / DELETE |
@@ -295,49 +295,73 @@ on 2026.2.x, which `latest` resolves to.
 
 ## Modelling
 
-The key layout is the schema. There is no ALTER TABLE to fix a bad choice
-later, only a migration that rewrites every item, so decide access patterns
-before attributes. Every key string lives in `packages/database/src/keys.ts` so
-the whole layout reads in one screen.
+One table per entity, named `<prefix>-<entity>`, with natural keys. Not one
+shared table with `USER#`-style prefixes: when a table holds a single entity,
+its key shape can be a TYPE, so `tables.users.get({ userId })` fails to compile
+instead of failing at runtime with a `ValidationException`.
 
+```ts
+export const tables = {
+  users:      new DdbTable<UserRow,      { id: string }>(userTableDefinition),
+  userEmails: new DdbTable<UserEmailRow, { email: string }>(userEmailTableDefinition),
+};
 ```
-users             pk = USER#<id>
-email uniqueness  pk = EMAIL#<lowercased email>     (a lock item)
-list newest-first gsi1: gsi1pk = USER, gsi1sk = <createdAt>#<id>
+
+**One declaration drives both access and provisioning.** `TableDefinition`
+carries the key schema and the indexes; `DdbTable` reads it, and
+`provisionTables()` creates from it. The usual failure -- an infrastructure
+declaration and the access code drifting apart -- is not expressible.
+
+**Every DynamoDB command lives in `DdbTable`.** Repositories never construct a
+`GetCommand`. That containment is what keeps command building, the `as TRow`
+casts, pagination loops, and the `ConditionalCheckFailedException → null`
+translation in one place instead of being re-derived, slightly differently, in
+every repository. A repository ends up reading as domain logic:
+
+```ts
+return this.users.updateIf({
+  key: { id },
+  updateExpression: "SET deletedAt = :now REMOVE listPartition, listSortKey",
+  conditionExpression: "attribute_exists(id) AND attribute_not_exists(deletedAt)",
+  expressionAttributeValues: { ":now": new Date().toISOString() },
+});
 ```
 
-**Sparse index for soft delete.** An item is in `gsi1` only while it has
-`gsi1pk` and `gsi1sk`. Soft-deleting REMOVEs both, so the item drops out of
-every list query with no FilterExpression, no wasted reads, and `Limit` still
-meaning what it says.
+**Partition by owner where ownership exists.** `{ userId, id }` makes "this
+user's orders" a plain partition read with no index at all. Reach for a GSI
+only when the lookup genuinely crosses owners.
 
-**Uniqueness is a lock item, not a constraint.** `EMAIL#<address>` is written
-with `attribute_not_exists(pk)`; the loser of a race gets
-`ConditionalCheckFailedException`, which becomes the 409. Email is lowercased
-into the key, because DynamoDB compares bytes and `A@x.com` would otherwise be
-a second user.
+**Sparse index for soft delete.** A row is in `by-created-at` only while it has
+`listPartition`/`listSortKey`. Soft delete REMOVEs both, so the row leaves every
+list query with no FilterExpression, no wasted reads, and `Limit` still meaning
+what it says.
+
+**Uniqueness is a claim row, not a constraint.** `user-emails` is written with
+`attribute_not_exists(email)`; the loser of a race gets `false` back, which
+becomes the 409. Email is lowercased into the key, because DynamoDB compares
+bytes and `A@x.com` would otherwise be a second user.
 
 **Cursor pagination, and no `total`.** Counting means reading every matching
-item. The API returns `nextCursor` and nothing else; its absence is the only
-end-of-list signal. This is also simply a better contract — a cursor stays
-correct when items are inserted mid-listing, where `?page=3` silently skips or
-repeats.
+item. Lists return `nextCursor`; its absence is the only end-of-list signal.
+That is also the better contract — a cursor stays correct when items are
+inserted mid-listing, where `?page=3` silently skips or repeats.
 
 ### Known limits, not yet addressed
 
-- **The list partition is a single key** (`gsi1pk = "USER"`), so every user
-  lands in one partition. That is fine to a few thousand items and a hot
-  partition beyond it. The fix is write sharding — `USER#<0..N>` plus a
-  scatter-gather read — which also makes the cursor a composite. Do it before
-  you rely on the list endpoint at scale.
+- **The list partition is a single key** (`listPartition = "user"`), so every
+  user lands in one partition: fine to a few thousand rows, a hot partition
+  beyond it. The fix is write sharding — `user#<0..N>` plus a scatter-gather
+  read — which also makes the cursor composite. Do it before relying on the
+  list endpoint at scale. Note that ownership-partitioned tables (`{ userId, id }`)
+  do not have this problem, which is why they are preferred where they apply.
 - **No free-text search.** DynamoDB cannot serve `name LIKE '%foo%'` without a
   full Scan, so the API deliberately has no `q` parameter. Add a search index
   (OpenSearch fed by DynamoDB Streams) rather than a Scan behind a friendly
-  query string.
+  query string. `DdbTable.scanAll` exists for seeds and scripts — never call it
+  from a handler.
 - **`status` is a FilterExpression**, applied after the index read, so a page
-  can come back shorter than `limit` while more items remain. Page until
-  `nextCursor` is absent, never until a page looks short. A dedicated GSI is
-  the fix if it becomes a hot path.
+  can be shorter than `limit` while more items remain. Page until `nextCursor`
+  is absent.
 - The rate limiter is per-process; see `backend/src/middleware/rate-limit.ts`.
 
 ## Traps

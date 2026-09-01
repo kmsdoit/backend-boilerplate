@@ -34,6 +34,8 @@ const camel = pascal.charAt(0).toLowerCase() + pascal.slice(1);
 const plural = `${rawName}s`;
 const pluralCamel = `${camel}s`;
 const table = plural.replace(/-/g, "_");
+/** SCREAMING_SNAKE, for the exported list-partition constant. */
+const UPPER = rawName.replace(/-/g, "_").toUpperCase();
 
 function write(relativePath: string, contents: string): void {
   const target = resolve(root, relativePath);
@@ -46,27 +48,23 @@ function write(relativePath: string, contents: string): void {
   console.log(`  created  ${relativePath}`);
 }
 
-/** Adds names to keys.ts's single re-export line in packages/database/src/index.ts. */
-function appendToKeysExport(names: string[]): void {
-  const target = resolve(root, "packages/database/src/index.ts");
+/**
+ * Inserts a domain's row type and table definition above the `tables` object.
+ *
+ * Appended rather than anchored because the block is multi-line and belongs
+ * next to the other row types: tables.ts is meant to be read top to bottom as
+ * the whole persistence model.
+ */
+function appendToTables(block: string): void {
+  const target = resolve(root, "packages/database/src/tables.ts");
   const source = readFileSync(target, "utf8");
-  const updated = source.replace(
-    /export \{([^}]*)\} from "\.\/keys\.ts";/,
-    (_match, existing: string) => {
-      const merged = [
-        ...existing
-          .split(",")
-          .map((name) => name.trim())
-          .filter(Boolean),
-        ...names.filter((name) => !existing.includes(name)),
-      ];
-      return `export { ${merged.join(", ")} } from "./keys.ts";`;
-    },
-  );
-  if (updated !== source) {
-    writeFileSync(target, updated);
-    console.log("  wired    packages/database/src/index.ts");
+  const anchor = "/**\n * The handles repositories compose.";
+  if (!source.includes(anchor)) {
+    console.error("  skipped  packages/database/src/tables.ts -- add the row type by hand");
+    return;
   }
+  writeFileSync(target, source.replace(anchor, `${block}\n${anchor}`));
+  console.log("  wired    packages/database/src/tables.ts (row type)");
 }
 
 /** Inserts `line` immediately above the anchor comment, keeping the anchor last. */
@@ -123,88 +121,77 @@ export type Update${pascal}Input = z.infer<typeof update${pascal}Schema>;
 `,
 );
 
-const UPPER = rawName.replace(/-/g, "_").toUpperCase();
-
-// Key helpers go into the shared keys.ts rather than a file per domain: the
-// whole point of that file is that the table's key layout can be read in one
-// screen.
+// Row type + table definition + handle, all from one declaration, so the
+// CreateTable call and the access code cannot drift.
 wire(
-  "packages/database/src/keys.ts",
-  "domain-keys",
-  `// domain:${rawName}
-/** ${pascal}: pk = ${UPPER}#<id>; listed newest-first via gsi1. */
-export const ${UPPER}_LIST_PARTITION = "${UPPER}";
-export const ${camel}Key = (id: string) => \`${UPPER}#\${id}\`;
-// /domain:${rawName}
-`,
+  "packages/database/src/tables.ts",
+  "domain-tables",
+  `  ${pluralCamel}: new DdbTable<${pascal}Row, { id: string }>(${camel}TableDefinition),`,
 );
-// One re-export line for every domain's key helpers, rewritten in place.
-appendToKeysExport([`${UPPER}_LIST_PARTITION`, `${camel}Key`]);
-
-write(
-  `backend/src/${rawName}/${rawName}-repository.ts`,
-  `import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-
-import type { Page, PaginationQuery } from "@app/contracts";
-import {
-  GSI1,
-  ${UPPER}_LIST_PARTITION,
-  ${camel}Key,
-  decodeCursor,
-  doc,
-  encodeCursor,
-  isConditionalCheckFailed,
-  listSortKey,
-  tableName,
-} from "@app/database";
-
-export type ${pascal}Record = {
+appendToTables(`
+export type ${pascal}Row = {
   id: string;
   name: string;
+  /** ISO-8601. Sorts lexicographically, which is what makes it usable as a sort key. */
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
+  /**
+   * Sparse index attributes. An item is in \`by-created-at\` only while these
+   * are present, so soft delete REMOVEs them and the row leaves every list
+   * query with no FilterExpression and no wasted reads.
+   */
+  listPartition?: string;
+  listSortKey?: string;
 };
 
-type ${pascal}Item = ${pascal}Record & { pk: string; gsi1pk?: string; gsi1sk?: string };
+/** The one partition every live ${rawName} is listed under. */
+export const ${UPPER}_LIST_PARTITION = "${rawName}";
 
-/** All access to ${plural}, in one place, so the key layout stays readable. */
-export function create${pascal}Repository() {
-  async function findById(id: string): Promise<${pascal}Record | null> {
-    const result = await doc.send(new GetCommand({ TableName: tableName, Key: { pk: ${camel}Key(id) } }));
-    const item = result.Item as ${pascal}Item | undefined;
-    // A soft-deleted item is still addressable by key -- only the index drops it.
-    if (!item || item.deletedAt) {
-      return null;
-    }
-    return toRecord(item);
+const ${camel}TableDefinition: TableDefinition = {
+  entity: "${plural}",
+  partitionKey: "id",
+  indexes: [{ name: "by-created-at", partitionKey: "listPartition", sortKey: "listSortKey" }],
+};
+`);
+
+write(
+  `backend/src/${rawName}/${rawName}-repository.ts`,
+  `import type { PaginationQuery } from "@app/contracts";
+import { ${UPPER}_LIST_PARTITION, tables, type Page, type ${pascal}Row } from "@app/database";
+
+/**
+ * All access to ${plural}. Notice there is not a single DynamoDB command in
+ * this file: DdbTable owns command construction, the casts, and the
+ * ConditionalCheckFailed translation, so a repository reads as domain logic.
+ */
+export class ${pascal}Repository {
+  constructor(private readonly ${pluralCamel} = tables.${pluralCamel}) {}
+
+  async findById(id: string): Promise<${pascal}Row | null> {
+    const found = await this.${pluralCamel}.get({ id });
+    // A soft-deleted row is still addressable by key -- only the index drops it.
+    return found && !found.deletedAt ? found : null;
   }
 
-  async function create(input: { id: string; name: string }): Promise<${pascal}Record> {
+  async create(input: { id: string; name: string }): Promise<${pascal}Row> {
     const now = new Date().toISOString();
-    const item: ${pascal}Item = {
-      pk: ${camel}Key(input.id),
+    const row: ${pascal}Row = {
       id: input.id,
       name: input.name,
       createdAt: now,
       updatedAt: now,
-      // Presence of these two is what puts the item in the list index.
-      gsi1pk: ${UPPER}_LIST_PARTITION,
-      gsi1sk: listSortKey(now, input.id),
+      listPartition: ${UPPER}_LIST_PARTITION,
+      // The id is a tiebreaker: two rows created in the same millisecond would
+      // otherwise collide on the sort key.
+      listSortKey: \`\${now}#\${input.id}\`,
     };
 
-    await doc.send(
-      new PutCommand({
-        TableName: tableName,
-        Item: item,
-        ConditionExpression: "attribute_not_exists(pk)",
-      }),
-    );
-
-    return toRecord(item);
+    await this.${pluralCamel}.put(row, { conditionExpression: "attribute_not_exists(id)" });
+    return row;
   }
 
-  async function update(id: string, changes: { name?: string }): Promise<${pascal}Record | null> {
+  async update(id: string, changes: { name?: string }): Promise<${pascal}Row | null> {
     const names: Record<string, string> = { "#updatedAt": "updatedAt" };
     const values: Record<string, unknown> = { ":updatedAt": new Date().toISOString() };
     const sets = ["#updatedAt = :updatedAt"];
@@ -218,89 +205,50 @@ export function create${pascal}Repository() {
       sets.push(\`#\${field} = :\${field}\`);
     }
 
-    try {
-      const result = await doc.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: { pk: ${camel}Key(id) },
-          UpdateExpression: \`SET \${sets.join(", ")}\`,
-          ExpressionAttributeNames: names,
-          ExpressionAttributeValues: values,
-          // UpdateItem is an upsert by default: without this a PATCH to a
-          // deleted id would silently resurrect it as a blank item.
-          ConditionExpression: "attribute_exists(pk) AND attribute_not_exists(deletedAt)",
-          ReturnValues: "ALL_NEW",
-        }),
-      );
-      return toRecord(result.Attributes as ${pascal}Item);
-    } catch (err) {
-      if (isConditionalCheckFailed(err)) return null;
-      throw err;
-    }
+    return this.${pluralCamel}.updateIf({
+      key: { id },
+      updateExpression: \`SET \${sets.join(", ")}\`,
+      conditionExpression: "attribute_exists(id) AND attribute_not_exists(deletedAt)",
+      expressionAttributeNames: names,
+      expressionAttributeValues: values,
+    });
   }
 
   /**
-   * Soft delete. REMOVEing the index attributes drops the item out of every
-   * list query for free -- that is what a sparse GSI buys, versus paying to
-   * read deleted items and filter them out afterwards.
+   * Soft delete. REMOVEing the index attributes drops the row out of every list
+   * query for free -- that is what a sparse index buys, versus paying to read
+   * deleted rows and filter them out afterwards.
    */
-  async function softDelete(id: string): Promise<${pascal}Record | null> {
-    const now = new Date().toISOString();
-    try {
-      const result = await doc.send(
-        new UpdateCommand({
-          TableName: tableName,
-          Key: { pk: ${camel}Key(id) },
-          UpdateExpression: "SET deletedAt = :now, updatedAt = :now REMOVE gsi1pk, gsi1sk",
-          ExpressionAttributeValues: { ":now": now },
-          ConditionExpression: "attribute_exists(pk) AND attribute_not_exists(deletedAt)",
-          ReturnValues: "ALL_OLD",
-        }),
-      );
-      return toRecord(result.Attributes as ${pascal}Item);
-    } catch (err) {
-      if (isConditionalCheckFailed(err)) return null;
-      throw err;
-    }
+  async softDelete(id: string): Promise<${pascal}Row | null> {
+    return this.${pluralCamel}.updateIf({
+      key: { id },
+      updateExpression: "SET deletedAt = :now, updatedAt = :now REMOVE listPartition, listSortKey",
+      conditionExpression: "attribute_exists(id) AND attribute_not_exists(deletedAt)",
+      expressionAttributeValues: { ":now": new Date().toISOString() },
+      returnValues: "ALL_OLD",
+    });
   }
 
-  async function list(filter: PaginationQuery): Promise<Page<${pascal}Record>> {
-    const result = await doc.send(
-      new QueryCommand({
-        TableName: tableName,
-        IndexName: GSI1,
-        KeyConditionExpression: "gsi1pk = :partition",
-        ExpressionAttributeValues: { ":partition": ${UPPER}_LIST_PARTITION },
-        // false = descending, i.e. newest first, because gsi1sk starts with an
-        // ISO-8601 timestamp.
-        ScanIndexForward: false,
-        Limit: filter.limit,
-        ExclusiveStartKey: decodeCursor(filter.cursor),
-      }),
-    );
-
-    return {
-      items: ((result.Items ?? []) as ${pascal}Item[]).map(toRecord),
-      nextCursor: encodeCursor(result.LastEvaluatedKey),
-    };
+  async list(filter: PaginationQuery): Promise<Page<${pascal}Row>> {
+    return this.${pluralCamel}.queryPage({
+      indexName: "by-created-at",
+      keyConditionExpression: "listPartition = :partition",
+      expressionAttributeValues: { ":partition": ${UPPER}_LIST_PARTITION },
+      // false = descending: the sort key starts with an ISO-8601 timestamp.
+      scanIndexForward: false,
+      limit: filter.limit,
+      cursor: filter.cursor,
+    });
   }
-
-  return { findById, create, update, softDelete, list };
 }
 
-/** Strips the key attributes; nothing above this layer should see them. */
-function toRecord(item: ${pascal}Item): ${pascal}Record {
-  const { pk: _pk, gsi1pk: _g1, gsi1sk: _g2, ...record } = item;
-  return record;
-}
-
-export type ${pascal}Repository = ReturnType<typeof create${pascal}Repository>;
+export const ${camel}Repository = new ${pascal}Repository();
 `,
 );
 
 write(
   `backend/src/${rawName}/${rawName}-response.ts`,
-  `import type { ${pascal}Record } from "./${rawName}-repository.ts";
+  `import type { ${pascal}Row } from "@app/database";
 
 export type ${pascal}Response = {
   id: string;
@@ -317,7 +265,7 @@ export type ${pascal}Response = {
  * serialised straight to the client by an accidental \`c.json(item)\`. Listing
  * fields explicitly is what stops key layout from becoming public API.
  */
-export function to${pascal}Response(${camel}: ${pascal}Record): ${pascal}Response {
+export function to${pascal}Response(${camel}: ${pascal}Row): ${pascal}Response {
   return {
     id: ${camel}.id,
     name: ${camel}.name,
@@ -333,17 +281,15 @@ write(
   `import { create${pascal}Schema, paginationQueryShape, update${pascal}Schema } from "@app/contracts";
 
 import { route, routes } from "../../lib/app-context.ts";
-import { create${pascal}Repository } from "../../${rawName}/${rawName}-repository.ts";
+import { ${camel}Repository } from "../../${rawName}/${rawName}-repository.ts";
 import { to${pascal}Response } from "../../${rawName}/${rawName}-response.ts";
 import { ${pascal}NotFound } from "./errors.ts";
-
-const ${pluralCamel} = create${pascal}Repository();
 
 export const ${camel}Routes = routes(
   route("/${plural}", "GET", {
     query: paginationQueryShape,
     handler: async ({ query, c }) => {
-      const page = await ${pluralCamel}.list(query);
+      const page = await ${camel}Repository.list(query);
 
       // No \`total\`: counting means reading every matching item. The absence of
       // \`nextCursor\` is the only "you have reached the end" signal.
@@ -356,7 +302,7 @@ export const ${camel}Routes = routes(
 
   route("/${plural}/:id", "GET", {
     handler: async ({ params, c }) => {
-      const found = await ${pluralCamel}.findById(params.id);
+      const found = await ${camel}Repository.findById(params.id);
       if (!found) throw ${pascal}NotFound();
       return c.json(to${pascal}Response(found), 200);
     },
@@ -368,7 +314,7 @@ export const ${camel}Routes = routes(
       // The id is generated here, not by the store: DynamoDB has no sequences,
       // and a client-chosen key is what lets the write be a single conditional
       // Put instead of a read-then-write.
-      const created = await ${pluralCamel}.create({ id: crypto.randomUUID(), ...body });
+      const created = await ${camel}Repository.create({ id: crypto.randomUUID(), ...body });
       return c.json(to${pascal}Response(created), 201);
     },
   }),
@@ -376,7 +322,7 @@ export const ${camel}Routes = routes(
   route("/${plural}/:id", "PATCH", {
     body: update${pascal}Schema,
     handler: async ({ params, body, c }) => {
-      const updated = await ${pluralCamel}.update(params.id, body);
+      const updated = await ${camel}Repository.update(params.id, body);
       if (!updated) throw ${pascal}NotFound();
       return c.json(to${pascal}Response(updated), 200);
     },
@@ -384,7 +330,7 @@ export const ${camel}Routes = routes(
 
   route("/${plural}/:id", "DELETE", {
     handler: async ({ params, c }) => {
-      const deleted = await ${pluralCamel}.softDelete(params.id);
+      const deleted = await ${camel}Repository.softDelete(params.id);
       if (!deleted) throw ${pascal}NotFound();
       return c.body(null, 204);
     },
@@ -424,9 +370,9 @@ if (!errorsSource.includes(`${pascal}NotFound`)) {
 
 console.log(`
 Next:
-  bun run dev               # GET/POST /${plural}
+  bun run db:provision      # create the new table\n  bun run dev               # GET/POST /${plural}
 
-There is no migration step: DynamoDB has no schema, and this domain shares the
-existing table. Adding an ACCESS PATTERN is the change that costs -- it means a
-new index, which means editing packages/database/src/table.ts.
+No migration step: DynamoDB has no schema, and \`db:provision\` creates the new
+table from the definition just written into packages/database/src/tables.ts.
+Adding an ACCESS PATTERN is the change that costs -- a new index there.
 `);

@@ -1,11 +1,15 @@
 #!/usr/bin/env bun
-/** Creates the table and its index if absent: `bun run db:provision`. */
+/** Creates any missing tables and indexes: `bun run db:provision`. */
 import { applicationConfig } from "@app/config";
 
-import { tableName } from "./client.ts";
-import { provisionTable } from "./table.ts";
+import { allTables } from "./tables.ts";
+import { provisionTables } from "./provisioning.ts";
 
-const result = await provisionTable();
+const created = await provisionTables();
+const target = applicationConfig.dynamo.endpoint ?? applicationConfig.dynamo.region;
+
 console.log(
-  `table "${tableName}" ${result} (${applicationConfig.dynamo.endpoint ?? applicationConfig.dynamo.region})`,
+  created.length > 0
+    ? `created ${created.join(", ")} on ${target}`
+    : `all ${allTables.length} tables already present on ${target}`,
 );

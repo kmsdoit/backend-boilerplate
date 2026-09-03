@@ -1,5 +1,11 @@
 node_modules
 dist
+
+# The snapshot filename tracks the DATABASE name, so running db:generate
+# against the test database leaves a second one behind. Only the development
+# snapshot is a real artefact -- it is what db:generate diffs against and must
+# be committed; this one is incidental.
+packages/database/migrations/.snapshot-*_test.json
 coverage
 *.log
 .DS_Store

@@ -37,6 +37,7 @@
     "db:seed": "bun run --cwd packages/database db:seed",
     "test:db:up": "docker compose up -d --wait mysql-test",
     "test:db:migrate": "APP_CONFIG_PATH=$PWD/config/application.test.yml bun run --cwd packages/database db:migrate",
+    "test:db:generate": "APP_CONFIG_PATH=$PWD/config/application.test.yml bun run --cwd packages/database db:generate",
     "verify": "bun run lint && bun run format:check && bun run typecheck && bun run test",
     "new:domain": "bun run scripts/new-domain.ts",
     "remove:domain": "bun run scripts/remove-domain.ts"

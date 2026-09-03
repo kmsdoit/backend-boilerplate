@@ -84,14 +84,14 @@ jobs:
       # with ER_PARSE_ERROR -- while typecheck, lint and the whole test suite
       # stayed green.
       - name: The generated domain actually migrates
-        # Against the TEST database, which is the one this job starts.
-        # `db:generate` and `db:migrate` default to config/application.yml,
-        # which points at the development server on another port.
-        env:
-          APP_CONFIG_PATH: ./config/application.test.yml
+        # The test:* variants, because they resolve APP_CONFIG_PATH with $PWD.
+        # The plain ones default to config/application.yml (the development
+        # server, which this job does not start), and a relative override does
+        # not work either: these run with --cwd packages/database, so
+        # ./config would resolve inside that package.
         run: |
-          bun run --cwd packages/database db:generate
-          bun run --cwd packages/database db:migrate
+          bun run test:db:generate
+          bun run test:db:migrate
 
       - name: The scaffolding still builds and its own tests still pass
         run: |

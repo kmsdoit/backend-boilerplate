@@ -100,23 +100,27 @@ write(
 import { BaseEntity } from "./base.entity.ts";
 
 /**
- * Serves the default list query (\`where deleted_at is null order by created_at
- * desc, id desc\`). Declared as raw DDL because MikroORM cannot model a partial
- * index from properties -- this decorator does not create it, the migration
- * does; it only stops \`db:generate\` emitting a \`drop index\` for it.
+ * Serves the default list query (\`where deleted_at is null order by
+ * created_at desc, id desc\`).
+ *
+ * MySQL has no partial indexes, so unlike a Postgres schema this cannot be
+ * narrowed to live rows -- it covers soft-deleted ones too, which costs a
+ * little space and nothing in correctness.
  */
 @Entity({ tableName: "${table}" })
-@Index({
-  name: "${table}_active_created_at_index",
-  expression:
-    'create index "${table}_active_created_at_index" on "${table}" ("created_at" desc, "id" desc) where "deleted_at" is null',
-})
+@Index({ name: "${table}_created_at_index", properties: ["createdAt", "id"] })
 export class ${pascal} extends BaseEntity {
   @Property({ type: "string", length: 255 })
   name!: string;
 
-  /** Null means live. The repository is the only place that knows this filter. */
-  @Property({ type: "timestamptz", nullable: true })
+  /**
+   * Null means live. \`datetime(3)\`, not \`timestamp\`: MySQL's default
+   * precision is whole seconds, and every connection is pinned to UTC by
+   * createMikroOrmConfig -- see base.entity.ts for why that matters.
+   *
+   * The repository is the only place that knows this filter.
+   */
+  @Property({ type: "datetime", length: 3, nullable: true })
   deletedAt?: Date;
 }
 `,
@@ -127,6 +131,14 @@ write(
   `import { ${pascal}, type EntityManager, type FilterQuery } from "@app/database";
 import { toOffset, type Paginated } from "@app/contracts";
 
+export type Create${pascal}Input = {
+  name: string;
+};
+
+export type Update${pascal}Changes = {
+  name?: string;
+};
+
 export type List${pascal}sFilter = {
   page: number;
   pageSize: number;
@@ -134,8 +146,13 @@ export type List${pascal}sFilter = {
 };
 
 /**
- * Every query for this entity lives here. That is what makes the soft-delete
- * filter enforceable -- a route cannot forget a filter it never writes.
+ * A factory taking an EntityManager, not a class holding a global connection.
+ *
+ * Every read AND every write for this entity lives here. Reads matter for the
+ * soft-delete filter (\`deletedAt: null\`) -- a route cannot forget a filter it
+ * never writes. Writes matter for the same reason in reverse: \`em.create\` /
+ * \`em.flush\` in a route means the rules about which fields may change, and
+ * what "deleted" means, get re-decided at each call site.
  */
 export function create${pascal}Repository(em: EntityManager) {
   return {
@@ -143,14 +160,56 @@ export function create${pascal}Repository(em: EntityManager) {
       return em.findOne(${pascal}, { id, deletedAt: null });
     },
 
+    async create(input: Create${pascal}Input): Promise<${pascal}> {
+      const created = em.create(${pascal}, input);
+      em.persist(created);
+      await em.flush();
+      return created;
+    },
+
+    /**
+     * Returns null when there is no live row with that id, which is the same
+     * thing a caller needs to know as "not found".
+     *
+     * An absent key means "this PATCH did not touch this field", never "clear
+     * it" -- so each field is assigned only when present.
+     */
+    async update(id: number, changes: Update${pascal}Changes): Promise<${pascal} | null> {
+      const found = await em.findOne(${pascal}, { id, deletedAt: null });
+      if (!found) {
+        return null;
+      }
+
+      if (changes.name !== undefined) {
+        found.name = changes.name;
+      }
+
+      await em.flush();
+      return found;
+    },
+
+    /** Soft delete: the row stays and anything referencing it stays valid. */
+    async softDelete(id: number): Promise<${pascal} | null> {
+      const found = await em.findOne(${pascal}, { id, deletedAt: null });
+      if (!found) {
+        return null;
+      }
+
+      found.deletedAt = new Date();
+      await em.flush();
+      return found;
+    },
+
     async list(filter: List${pascal}sFilter): Promise<Paginated<${pascal}>> {
       const where: FilterQuery<${pascal}> = { deletedAt: null };
 
       if (filter.q) {
-        // NOTE: a leading-wildcard ILIKE cannot use a btree index. Fine for
-        // small tables; for a large one add a pg_trgm GIN index or a dedicated
-        // search column, and check the plan with \`explain (analyze)\`.
-        where.name = { $ilike: \`%\${filter.q}%\` };
+        // \`$like\`, not \`$ilike\`: MySQL has no ILIKE operator. Case-insensitivity
+        // comes from the collation (utf8mb4_0900_ai_ci), so it is a property of
+        // the schema rather than the query. NOTE a leading-wildcard LIKE cannot
+        // use a btree index -- fine for small tables, check the plan before
+        // relying on it for a large one.
+        where.name = { $like: \`%\${filter.q}%\` };
       }
 
       // findAndCount issues rows and COUNT together; two separate awaits is how
@@ -199,13 +258,7 @@ export function to${pascal}Response(${camel}: ${pascal}): ${pascal}Response {
 
 write(
   `backend/src/api/routes/${rawName}.ts`,
-  `import {
-  create${pascal}Schema,
-  list${pascal}sQueryShape,
-  paginationQueryShape,
-  update${pascal}Schema,
-} from "@app/contracts";
-import { ${pascal} } from "@app/database";
+  `import { create${pascal}Schema, paginationQueryShape, update${pascal}Schema } from "@app/contracts";
 
 import { route, routes } from "../../lib/app-context.ts";
 import { getEntityManager } from "../../lib/db.ts";
@@ -213,9 +266,15 @@ import { create${pascal}Repository } from "../../${rawName}/${rawName}-repositor
 import { to${pascal}Response } from "../../${rawName}/${rawName}-response.ts";
 import { ${pascal}NotFound } from "./errors.ts";
 
+/**
+ * Nothing here touches the EntityManager beyond handing it to the repository.
+ * A handler's job is authorization against the caller, turning a null result
+ * into the right status code, and mapping the entity to a response -- not
+ * deciding which fields may change or what "deleted" means.
+ */
 export const ${camel}Routes = routes(
   route("/${plural}", "GET", {
-    query: { ...paginationQueryShape, ...list${pascal}sQueryShape },
+    query: { ...paginationQueryShape },
     handler: async ({ query, c }) => {
       const em = await getEntityManager();
       const result = await create${pascal}Repository(em).list(query);
@@ -249,9 +308,7 @@ export const ${camel}Routes = routes(
     body: create${pascal}Schema,
     handler: async ({ body, c }) => {
       const em = await getEntityManager();
-      const created = em.create(${pascal}, body);
-      em.persist(created);
-      await em.flush();
+      const created = await create${pascal}Repository(em).create(body);
 
       return c.json(to${pascal}Response(created), 201);
     },
@@ -261,36 +318,24 @@ export const ${camel}Routes = routes(
     body: update${pascal}Schema,
     handler: async ({ params, body, c }) => {
       const em = await getEntityManager();
-      const found = await create${pascal}Repository(em).findById(Number(params.id));
+      const updated = await create${pascal}Repository(em).update(Number(params.id), body);
 
-      if (!found) {
+      if (!updated) {
         throw ${pascal}NotFound();
       }
 
-      // An absent key means "not touched". Assigning unconditionally would
-      // write undefined over a real value on a partial PATCH.
-      if (body.name !== undefined) {
-        found.name = body.name;
-      }
-
-      await em.flush();
-
-      return c.json(to${pascal}Response(found), 200);
+      return c.json(to${pascal}Response(updated), 200);
     },
   }),
 
   route("/${plural}/:id", "DELETE", {
     handler: async ({ params, c }) => {
       const em = await getEntityManager();
-      const found = await create${pascal}Repository(em).findById(Number(params.id));
+      const deleted = await create${pascal}Repository(em).softDelete(Number(params.id));
 
-      if (!found) {
+      if (!deleted) {
         throw ${pascal}NotFound();
       }
-
-      // Soft delete: the row stays and foreign keys stay valid.
-      found.deletedAt = new Date();
-      await em.flush();
 
       return c.body(null, 204);
     },

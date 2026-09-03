@@ -46,7 +46,7 @@
         "email_active": {
           "name": "email_active",
           "type": "varchar(255)",
-          "generated": "always as (if(`deleted_at` is null, `email`, null)) stored",
+          "generated": "(if((`deleted_at` is null),`email`,NULL)) stored",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
@@ -126,6 +126,16 @@
           "constraint": false,
           "primary": false,
           "unique": false
+        },
+        {
+          "keyName": "users_active_email_unique",
+          "columnNames": [
+            "email_active"
+          ],
+          "composite": false,
+          "constraint": true,
+          "primary": false,
+          "unique": true
         },
         {
           "keyName": "PRIMARY",

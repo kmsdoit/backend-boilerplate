@@ -74,6 +74,25 @@ jobs:
         run: |
           bun run remove:domain user
           bun run new:domain order
+      # THE STEP THAT MATTERS MOST, and the one whose absence let a real bug
+      # ship: the generated entity's column types and index declarations are
+      # STRINGS inside decorators, so typecheck and lint see nothing wrong with
+      # a Postgres `timestamptz` or a partial index in a MySQL project. Only
+      # actually generating the migration and running it proves the template
+      # matches the database. A previous version of the generator emitted
+      # `timestamptz` and `create index ... where ...`, and `db:migrate` failed
+      # with ER_PARSE_ERROR -- while typecheck, lint and the whole test suite
+      # stayed green.
+      - name: The generated domain actually migrates
+        # Against the TEST database, which is the one this job starts.
+        # `db:generate` and `db:migrate` default to config/application.yml,
+        # which points at the development server on another port.
+        env:
+          APP_CONFIG_PATH: ./config/application.test.yml
+        run: |
+          bun run --cwd packages/database db:generate
+          bun run --cwd packages/database db:migrate
+
       - name: The scaffolding still builds and its own tests still pass
         run: |
           bun run typecheck

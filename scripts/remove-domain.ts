@@ -67,6 +67,10 @@ function unwire(relativePath: string, rules: [RegExp, string?][]): void {
     after = after.replace(pattern, replacement ?? "");
   }
   after = after.replace(/\n{3,}/g, "\n\n");
+  // Exactly one trailing newline. Removing a block from the end of a file
+  // otherwise leaves a blank line behind, which `format:check` rejects -- so a
+  // clean removal would leave `bun run verify` failing.
+  after = `${after.replace(/\s+$/, "")}\n`;
   if (after !== before) {
     writeFileSync(target, after);
     console.log(`  unwired  ${relativePath}`);

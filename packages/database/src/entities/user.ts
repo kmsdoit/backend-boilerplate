@@ -1,4 +1,4 @@
-import { Entity, Enum, Index, Property, type Opt } from "@mikro-orm/core";
+import { Entity, Enum, Index, Property, Unique, type Opt } from "@mikro-orm/core";
 
 import { userRoleValues, userStatusValues, type UserRole, type UserStatus } from "@app/contracts";
 
@@ -22,6 +22,10 @@ import { BaseEntity } from "./base.entity.ts";
 // cannot be partial -- see emailActive below -- so it also indexes
 // soft-deleted rows, which costs a little space and nothing in correctness.
 @Index({ name: "users_created_at_index", properties: ["createdAt", "id"] })
+// Declared so `db:generate` recognises the index as intentional. Without it
+// the diff engine reads it as "should not exist" and emits a drop on every
+// run -- the same trap a partial index caused on Postgres.
+@Unique({ name: "users_active_email_unique", properties: ["emailActive"] })
 export class User extends BaseEntity {
   @Property({ type: "string", length: 255 })
   email!: string;
@@ -43,12 +47,21 @@ export class User extends BaseEntity {
    * It is `STORED`, not `VIRTUAL`, because MySQL cannot build a UNIQUE index
    * over a virtual column. Nothing reads this column; do not map it into a
    * response.
+   *
+   * TRAP -- the expression below must be MySQL's NORMALISED form, not the
+   * readable one the migration writes. MySQL rewrites what you give it
+   * (`if(deleted_at is null, email, null)` becomes
+   * `if((`deleted_at` is null),`email`,NULL)`) and `db:generate` compares that
+   * stored string literally. Write it any other way -- extra spaces, lowercase
+   * `null`, different parentheses -- and every single `db:generate` emits a
+   * spurious `drop column` + `add column` pair for a schema that is already
+   * correct. Verified: this exact string is what makes the diff empty.
    */
   @Property({
     type: "string",
     length: 255,
     nullable: true,
-    generated: "always as (if(`deleted_at` is null, `email`, null)) stored",
+    generated: "(if((`deleted_at` is null),`email`,NULL)) stored",
   })
   emailActive?: string;
 

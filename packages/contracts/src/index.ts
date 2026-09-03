@@ -9,7 +9,8 @@ export {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   paginationQueryShape,
-  type Page,
+  toOffset,
+  type Paginated,
   type PaginationQuery,
 } from "./pagination.ts";
 

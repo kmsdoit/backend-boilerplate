@@ -2,48 +2,46 @@
 /**
  * Idempotent development seed: `bun run db:seed`.
  *
- * Idempotent matters -- a seed you can only run against empty tables is a seed
- * nobody runs. Fixed ids mean re-running overwrites the same two rows instead
- * of accumulating duplicates.
+ * Idempotent matters -- a seed you can only run against an empty database is
+ * a seed nobody runs. Re-running this updates the existing rows instead of
+ * failing on the unique index.
  */
 import { applicationConfig } from "@app/config";
 
-import { provisionTables } from "./provisioning.ts";
-import { USER_LIST_PARTITION, tables, type UserRow } from "./tables.ts";
+import { User } from "./entities/user.ts";
+import { closeORM, getEntityManager } from "./orm.ts";
 
-if (applicationConfig.application.environment === "production") {
-  throw new Error("Refusing to seed production tables.");
-}
-
-await provisionTables();
-
-const SEED_USERS: Pick<UserRow, "id" | "email" | "name" | "role">[] = [
-  {
-    id: "00000000-0000-4000-8000-000000000001",
-    email: "admin@example.com",
-    name: "Admin",
-    role: "admin",
-  },
-  {
-    id: "00000000-0000-4000-8000-000000000002",
-    email: "member@example.com",
-    name: "Member",
-    role: "member",
-  },
+const SEED_USERS = [
+  { email: "admin@example.com", name: "Admin", role: "admin" as const },
+  { email: "member@example.com", name: "Member", role: "member" as const },
 ];
 
-for (const seed of SEED_USERS) {
-  const now = new Date().toISOString();
-  await tables.userEmails.putIfAbsent({ email: seed.email, userId: seed.id }, "email");
-  await tables.users.put({
-    ...seed,
-    status: "active",
-    createdAt: now,
-    updatedAt: now,
-    listPartition: USER_LIST_PARTITION,
-    listSortKey: `${now}#${seed.id}`,
-  });
-  console.log(`seeded ${seed.email}`);
+async function seed(): Promise<void> {
+  if (applicationConfig.application.environment === "production") {
+    throw new Error("Refusing to seed a production database.");
+  }
+
+  const em = await getEntityManager({ databaseUrl: applicationConfig.database.url });
+
+  for (const seedUser of SEED_USERS) {
+    const existing = await em.findOne(User, { email: seedUser.email, deletedAt: null });
+
+    if (existing) {
+      existing.name = seedUser.name;
+      existing.role = seedUser.role;
+      console.log(`updated ${seedUser.email}`);
+    } else {
+      em.persist(em.create(User, { ...seedUser, status: "active" }));
+      console.log(`created ${seedUser.email}`);
+    }
+  }
+
+  await em.flush();
+  console.log(`seeded ${SEED_USERS.length} users into ${applicationConfig.application.name}`);
 }
 
-console.log(`${applicationConfig.application.name} ready`);
+try {
+  await seed();
+} finally {
+  await closeORM();
+}

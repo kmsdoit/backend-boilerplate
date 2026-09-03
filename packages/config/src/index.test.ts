@@ -33,8 +33,7 @@ describe("sample and production config", () => {
     const previous = { ...process.env };
     Object.assign(process.env, {
       CORS_ORIGINS: "https://app.example.com,https://admin.example.com",
-      AWS_REGION: "ap-northeast-2",
-      DYNAMO_TABLE_PREFIX: "app",
+      DATABASE_URL: "postgresql://user:pw@db.example.com:5432/app",
       JWT_SECRET: "a-production-secret-that-is-at-least-32-chars",
       JWT_ISSUER: "https://auth.example.com",
       JWT_AUDIENCE: "backend-boilerplate",
@@ -58,10 +57,9 @@ describe("sample and production config", () => {
 
   it("names the missing variable and the path that needed it", () => {
     const previous = { ...process.env };
-    delete process.env.AWS_REGION;
+    delete process.env.DATABASE_URL;
     Object.assign(process.env, {
       CORS_ORIGINS: "https://app.example.com",
-      DYNAMO_TABLE_PREFIX: "app",
       JWT_SECRET: "a-production-secret-that-is-at-least-32-chars",
       JWT_ISSUER: "https://auth.example.com",
       JWT_AUDIENCE: "backend-boilerplate",
@@ -70,7 +68,7 @@ describe("sample and production config", () => {
     try {
       expect(() =>
         loadApplicationConfigFromPath(resolve(configDirectory, "application.production.yml")),
-      ).toThrow(/Missing environment variable AWS_REGION/);
+      ).toThrow(/Missing environment variable DATABASE_URL/);
     } finally {
       process.env = previous;
     }
@@ -110,19 +108,19 @@ describe("schema defaults", () => {
   it("fills nested server defaults when the section is omitted", () => {
     const config = applicationConfigSchema.parse({
       application: { name: "x", environment: "test" },
-      dynamo: { tableNamePrefix: "x" },
+      database: { url: "postgresql://localhost/x" },
       auth: { jwtSecret: "a-secret-value-that-is-at-least-32-characters" },
     });
 
     expect(config.server.port).toBe(3000);
     expect(config.server.rateLimit).toEqual({ windowSeconds: 60, maxWrites: 30 });
-    expect(config.dynamo.region).toBe("us-east-1");
+    expect(config.database.pool).toEqual({ min: 2, max: 10 });
   });
 
   it("keeps requestTimeoutMs resolved in the server default", () => {
     const config = applicationConfigSchema.parse({
       application: { name: "x", environment: "test" },
-      dynamo: { tableNamePrefix: "x" },
+      database: { url: "postgresql://localhost/x" },
       auth: { jwtSecret: "a-secret-value-that-is-at-least-32-characters" },
     });
 
@@ -132,7 +130,7 @@ describe("schema defaults", () => {
   it("rejects a jwtSecret shorter than 32 characters", () => {
     const result = applicationConfigSchema.safeParse({
       application: { name: "x", environment: "test" },
-      dynamo: { tableNamePrefix: "x" },
+      database: { url: "postgresql://localhost/x" },
       auth: { jwtSecret: "too-short" },
     });
 
@@ -143,7 +141,7 @@ describe("schema defaults", () => {
 describe("production guards", () => {
   const productionBase = {
     application: { name: "x", environment: "production" as const },
-    dynamo: { tableNamePrefix: "x" },
+    database: { url: "postgresql://localhost/x" },
     server: { corsOrigins: ["https://app.example.com"] },
   };
 
@@ -213,8 +211,8 @@ describe("config source precedence", () => {
       "application:",
       "  name: from-env",
       "  environment: test",
-      "dynamo:",
-      "  tableNamePrefix: from-env",
+      "database:",
+      "  url: postgresql://localhost/from-env",
       "auth:",
       "  jwtSecret: an-env-supplied-secret-of-at-least-32-chars",
     ].join("\n");
@@ -223,17 +221,17 @@ describe("config source precedence", () => {
     const { applicationConfig: loaded } = await import("./index.ts");
 
     expect(loaded.application.name).toBe("from-env");
-    expect(loaded.dynamo.tableNamePrefix).toBe("from-env");
+    expect(loaded.database.url).toBe("postgresql://localhost/from-env");
   });
 
   it("still resolves ${ENV} placeholders inside APP_CONFIG", async () => {
-    process.env.PLACEHOLDER_TABLE = "substituted";
+    process.env.PLACEHOLDER_DB_URL = "postgresql://localhost/substituted";
     process.env.APP_CONFIG = [
       "application:",
       "  name: from-env",
       "  environment: test",
-      "dynamo:",
-      "  tableNamePrefix: ${PLACEHOLDER_TABLE}",
+      "database:",
+      "  url: ${PLACEHOLDER_DB_URL}",
       "auth:",
       "  jwtSecret: an-env-supplied-secret-of-at-least-32-chars",
     ].join("\n");
@@ -241,7 +239,7 @@ describe("config source precedence", () => {
     vi.resetModules();
     const { applicationConfig: loaded } = await import("./index.ts");
 
-    expect(loaded.dynamo.tableNamePrefix).toBe("substituted");
-    delete process.env.PLACEHOLDER_TABLE;
+    expect(loaded.database.url).toBe("postgresql://localhost/substituted");
+    delete process.env.PLACEHOLDER_DB_URL;
   });
 });

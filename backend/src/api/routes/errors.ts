@@ -26,9 +26,18 @@ export const CannotModifySelf = () =>
   new HTTPException(403, { message: "cannot modify your own account through this endpoint" });
 
 /**
- * Uniqueness is enforced by a conditional write on a lock item, not by a
- * constraint the database owns, so there is no driver error code to translate
- * at the edge the way `23505` was. The repository raises
- * `UniqueConstraintError` and the route maps it here -- see
- * `createUserRepository.create` for the write sequence and what it costs.
+ * Maps a Postgres unique-constraint name to the error it should surface as.
+ *
+ * WHY: a pre-check like "is this email taken?" followed by an insert is not
+ * atomic. Two concurrent requests both see "no" and both insert; the unique
+ * index rejects the loser. error-handler.ts looks the constraint name up here
+ * and produces the same response the pre-check would have, so the caller
+ * cannot tell the difference between arriving second and losing a race.
+ *
+ * Keep constraint names in this map ONLY. A duplicated string elsewhere means
+ * a future migration rename silently stops being handled, and the 409 quietly
+ * becomes a 500.
  */
+export const uniqueConstraintErrors: Record<string, () => HTTPException> = {
+  users_active_email_unique: UserEmailTaken,
+};

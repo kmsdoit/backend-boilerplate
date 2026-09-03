@@ -1,8 +1,10 @@
 import type { ErrorHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 
+import { isUniqueViolation } from "@app/database";
 import { logger } from "@app/observability";
 
+import { uniqueConstraintErrors } from "../api/routes/errors.ts";
 import type { AppEnv } from "../lib/app-context.ts";
 import { env } from "../lib/env.ts";
 
@@ -23,7 +25,19 @@ export const errorHandler: ErrorHandler<AppEnv> = (rawErr, c) => {
       ? Number((performance.now() - requestStart).toFixed(1))
       : undefined;
 
-  const err: Error = rawErr;
+  let err: Error = rawErr;
+
+  // A check-then-insert guard in a route ("is this email taken?") is not
+  // atomic: two concurrent requests can both see "no" and both insert. The
+  // unique index is the real guarantee, and Postgres rejects the loser. Map
+  // that rejection to the same status the guard itself would have produced,
+  // so a caller cannot tell whether they lost a race or arrived second.
+  if (isUniqueViolation(rawErr)) {
+    const mapped = rawErr.constraint ? uniqueConstraintErrors[rawErr.constraint] : undefined;
+    if (mapped) {
+      err = mapped();
+    }
+  }
 
   c.header("x-request-id", requestId);
 

@@ -11,11 +11,12 @@
  * applied by the preflight.
  */
 import { sign } from "hono/jwt";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { applicationConfig } from "@app/config";
 
 import app from "./hono.ts";
+import { closeORM } from "../lib/db.ts";
 
 async function request(path: string, init: RequestInit & { token?: string } = {}) {
   const { token, headers, ...rest } = init;
@@ -31,17 +32,21 @@ async function request(path: string, init: RequestInit & { token?: string } = {}
   );
 }
 
+afterAll(async () => {
+  await closeORM();
+});
+
 describe("probes", () => {
   it("serves liveness without a token", async () => {
     expect((await request("/health")).status).toBe(200);
   });
 
-  it("serves readiness with the table provisioned", async () => {
+  it("serves readiness with the database up", async () => {
     const res = await request("/ready");
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
       status: "ok",
-      checks: [{ name: "dynamo", ok: true }],
+      checks: [{ name: "database", ok: true }],
     });
   });
 

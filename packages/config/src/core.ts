@@ -98,35 +98,14 @@ const baseApplicationConfigSchema = z.object({
     rateLimit: { windowSeconds: 60, maxWrites: 30 },
     requestTimeoutMs: 15_000,
   }),
-  /**
-   * DynamoDB, or anything speaking its API -- ScyllaDB's Alternator locally,
-   * real DynamoDB in AWS. Only `endpoint` differs between the two, which is
-   * the entire reason this stack was chosen: the application code is identical.
-   */
-  dynamo: z.object({
-    /**
-     * Omit in AWS so the SDK resolves the regional endpoint itself. Set it to
-     * the Alternator address (http://localhost:8000) for local development.
-     */
-    endpoint: z.string().min(1).optional(),
-    region: z.string().min(1).default("us-east-1"),
-    /**
-     * Prefix for every physical table name (`<prefix>-users`). One table per
-     * entity, rather than one shared table with prefixed keys: the key shape
-     * then IS the table's type, so a wrong key is a compile error instead of a
-     * runtime ValidationException, and an ownership query
-     * ("this user's orders") is a plain partition read needing no index.
-     */
-    tableNamePrefix: z.string().min(1),
-    /**
-     * Alternator ignores credentials unless started with
-     * --alternator-enforce-authorization, but the AWS SDK refuses to sign a
-     * request without them, so local development needs placeholders. In AWS,
-     * leave these unset and let the SDK use the task/instance role -- putting
-     * long-lived keys in config is exactly what that role exists to avoid.
-     */
-    accessKeyId: z.string().min(1).optional(),
-    secretAccessKey: z.string().min(1).optional(),
+  database: z.object({
+    url: z.string().min(1),
+    pool: z
+      .object({
+        min: z.number().int().min(0).default(2),
+        max: z.number().int().min(1).default(10),
+      })
+      .default({ min: 2, max: 10 }),
   }),
   auth: z.object({
     /**

@@ -18,16 +18,16 @@ if [ ! -f config/application.yml ]; then
   cp config/application.sample.yml config/application.yml
 fi
 
-step "Starting ScyllaDB (Alternator)"
+step "Starting PostgreSQL"
 if ! docker info >/dev/null 2>&1; then
   echo "Docker is not running. Start Docker Desktop (or point config/application.yml"
   echo "at a database you already have) and re-run: bun run setup"
   exit 1
 fi
-docker compose up -d --wait scylla
+docker compose up -d --wait postgres
 
-step "Provisioning the table"
-bun run db:provision
+step "Applying migrations"
+bun run db:migrate
 
 step "Seeding development data"
 bun run db:seed

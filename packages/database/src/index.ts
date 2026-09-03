@@ -1,11 +1,7 @@
-export { doc, rawClient, tableNameFor } from "./client.ts";
-export { decodeCursor, encodeCursor } from "./cursor.ts";
-export { DdbTable, type DdbKey, type Page, type TableDefinition } from "./table.ts";
-export { provisionTables, tablesReady } from "./provisioning.ts";
-/**
- * `export *` on purpose: tables.ts holds every row type, list partition and
- * table handle, and a new domain adds all three at once. Listing them here by
- * hand would mean a fourth place to remember, and a domain that compiles
- * everywhere except at its own import.
- */
-export * from "./tables.ts";
+export { createMikroOrmConfig, type DatabaseConfigOptions } from "./config.ts";
+export { BaseEntity, User, entities } from "./entities/index.ts";
+// domain-entity-exports: `bun run new:domain` inserts above this line.
+export { closeORM, getEntityManager, initializeORM } from "./orm.ts";
+export { isUniqueViolation, PG_UNIQUE_VIOLATION_CODE } from "./errors.ts";
+/** Re-exported so consumers do not need their own MikroORM dependency. */
+export type { EntityManager, FilterQuery } from "@mikro-orm/postgresql";

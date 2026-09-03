@@ -28,12 +28,11 @@ if (!rawName || !/^[a-z][a-z0-9-]*$/.test(rawName)) {
 const pascal = rawName.replace(/(^|-)([a-z])/g, (_, __, c: string) => c.toUpperCase());
 const camel = pascal.charAt(0).toLowerCase() + pascal.slice(1);
 const plural = `${rawName}s`;
-const upper = rawName.replace(/-/g, "_").toUpperCase();
-const pluralCamel = `${camel}s`;
 
 const files = [
   `packages/contracts/src/${rawName}.ts`,
   `packages/contracts/src/${rawName}.test.ts`,
+  `packages/database/src/entities/${rawName}.ts`,
   `packages/database/src/${rawName}.integration.test.ts`,
   // Includes the domain's own integration tests, which live beside its code.
   `backend/src/${rawName}`,
@@ -78,29 +77,18 @@ function unwire(relativePath: string, rules: [RegExp, string?][]): void {
 unwire("packages/contracts/src/index.ts", [
   [new RegExp(`export \\{[^}]*\\} from "\\./${rawName}\\.ts";\\n`, "g")],
 ]);
-// The row type, the table definition and the handle all live in tables.ts.
-//
-// The patterns match `<Pascal>*Row` / `<camel>*TableDefinition` rather than
-// exact names, because a domain may own more than one table -- the bundled
-// example has `UserRow` and `UserEmailRow` -- and leaving the second one
-// behind provisions a table nothing reads.
-unwire("packages/database/src/tables.ts", [
+unwire("packages/database/src/entities/index.ts", [
+  [new RegExp(`.*from "\\./${rawName}\\.ts";\\n`, "g")],
+  [new RegExp(`^\\s*${pascal},\\n`, "gm")],
+]);
+unwire("packages/database/src/index.ts", [
+  [new RegExp(`export \\{[^}]*\\} from "\\./entities/${rawName}\\.ts";\\n`, "g")],
+  // The bundled example is also named in the aggregate entities export --
+  // strip just that one name and keep the rest of the line.
   [
-    new RegExp(
-      `\\n?/\\*\\*[^*]*\\*/\\n?export type ${pascal}\\w*Row = \\{[\\s\\S]*?\\n\\};\\n`,
-      "g",
-    ),
+    new RegExp(`(export \\{[^}]*?), ${pascal}([^}]*\\} from "\\./entities/index\\.ts";)`, "g"),
+    "$1$2",
   ],
-  [new RegExp(`\\n?export type ${pascal}\\w*Row = \\{[\\s\\S]*?\\n\\};\\n`, "g")],
-  [new RegExp(`\\n?/\\*\\* The one partition[^\\n]*\\n`, "g")],
-  [new RegExp(`export const ${upper}\\w*_LIST_PARTITION = [^\\n]*\\n`, "g")],
-  [
-    new RegExp(
-      `\\n?const ${camel}\\w*TableDefinition: TableDefinition = \\{[\\s\\S]*?\\n\\};\\n`,
-      "g",
-    ),
-  ],
-  [new RegExp(`^\\s*\\w+: new DdbTable<${pascal}\\w*Row,[^\\n]*\\n`, "gm")],
 ]);
 unwire("backend/src/api/routes/index.ts", [
   [new RegExp(`.*from "\\./${rawName}\\.ts";\\n`, "g")],
@@ -132,34 +120,41 @@ unwire("backend/src/api/routes/errors.ts", [
  * removal instead of failing on a dangling import.
  */
 const seedPath = resolve(root, "packages/database/src/seed.ts");
-if (
-  existsSync(seedPath) &&
-  new RegExp(`${camel}Key|${pascal}`, "i").test(readFileSync(seedPath, "utf8"))
-) {
+if (existsSync(seedPath) && new RegExp(`\\b${pascal}\\b`).test(readFileSync(seedPath, "utf8"))) {
   writeFileSync(
     seedPath,
     `#!/usr/bin/env bun
 /**
  * Idempotent development seed: \`bun run db:seed\`.
  *
- * Idempotent matters -- a seed you can only run against empty tables is a seed
- * nobody runs. Fixed ids mean re-running overwrites the same rows instead of
- * accumulating duplicates.
+ * Idempotent matters -- a seed you can only run against an empty database is a
+ * seed nobody runs. Look up each row and update it rather than inserting
+ * blindly, so re-running is a no-op instead of a unique-constraint error.
  */
 import { applicationConfig } from "@app/config";
 
-import { provisionTables } from "./provisioning.ts";
+import { closeORM, getEntityManager } from "./orm.ts";
 
-if (applicationConfig.application.environment === "production") {
-  throw new Error("Refusing to seed production tables.");
+async function seed(): Promise<void> {
+  if (applicationConfig.application.environment === "production") {
+    throw new Error("Refusing to seed a production database.");
+  }
+
+  const em = await getEntityManager({ databaseUrl: applicationConfig.database.url });
+
+  // Seed your domains here, e.g.:
+  //   const existing = await em.findOne(Order, { reference: "demo", deletedAt: null });
+  //   if (!existing) em.persist(em.create(Order, { reference: "demo" }));
+
+  await em.flush();
+  console.log(\`nothing to seed for \${applicationConfig.application.name}\`);
 }
 
-await provisionTables();
-
-// Seed your domains here, e.g.:
-//   await tables.orders.put({ id: "demo", name: "Demo", ... });
-
-console.log(\`\${applicationConfig.application.name} ready\`);
+try {
+  await seed();
+} finally {
+  await closeORM();
+}
 `,
   );
   console.log("  reset    packages/database/src/seed.ts (it seeded this domain)");

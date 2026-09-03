@@ -6,10 +6,11 @@
  * Needs the test database, like the other integration tests.
  */
 import { sign } from "hono/jwt";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import { applicationConfig } from "@app/config";
 
+import { closeORM } from "../lib/db.ts";
 import { handler } from "./lambda.ts";
 
 type LambdaResult = { statusCode: number; body: string; headers?: Record<string, string> };
@@ -40,6 +41,10 @@ async function invoke(...args: Parameters<typeof event>): Promise<LambdaResult> 
   return (await handler(event(...args) as never, {} as never)) as LambdaResult;
 }
 
+afterAll(async () => {
+  await closeORM();
+});
+
 describe("lambda handler", () => {
   it("serves liveness", async () => {
     const res = await invoke("GET", "/health");
@@ -47,10 +52,10 @@ describe("lambda handler", () => {
     expect(JSON.parse(res.body)).toMatchObject({ status: "ok" });
   });
 
-  it("reaches the table through readiness", async () => {
+  it("reaches the database through readiness", async () => {
     const res = await invoke("GET", "/ready");
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toMatchObject({ checks: [{ name: "dynamo", ok: true }] });
+    expect(JSON.parse(res.body)).toMatchObject({ checks: [{ name: "database", ok: true }] });
   });
 
   // The same middleware chain must apply here as under Bun.serve -- that is

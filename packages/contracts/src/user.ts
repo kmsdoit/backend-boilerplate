@@ -5,9 +5,13 @@ import { z } from "zod";
  * in this codebase follows:
  *
  *   contracts (this file)  what a request may contain, and the allowed values
- *   database/keys.ts       how it is addressed in the table
- *   backend/<domain>/      repository (all access) + response mapper (what leaves)
+ *   database/entities      how it is stored
+ *   backend/<domain>/      repository (queries) + response mapper (what leaves)
  *   backend/api/routes/    the HTTP surface, built from the two above
+ *
+ * The split matters most at the last step: a route never returns an entity
+ * directly, so adding a column (a password hash, an internal flag) cannot
+ * accidentally start appearing in API responses.
  */
 
 export const userRoleValues = ["admin", "member"] as const;
@@ -24,11 +28,14 @@ export const createUserSchema = z.strictObject({
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 
 /**
- * `.strictObject` rejects unknown keys instead of ignoring them: on a PATCH
- * that is the difference between a typo'd field being silently dropped (200,
- * nothing changed) and a 400 that names the problem.
+ * `.strictObject` rejects unknown keys instead of ignoring them. On a PATCH
+ * that is the difference between a typo'd field name being silently dropped
+ * (the request returns 200 and nothing changed) and the caller getting a 400
+ * that names the problem.
  *
- * An absent key means "this PATCH did not touch this field", never "clear it".
+ * Every field is optional, and an absent key means "this PATCH did not touch
+ * this field" -- never "clear it". `.refine` rejects the empty body, since a
+ * PATCH that changes nothing is a mistake somewhere upstream.
  */
 export const updateUserSchema = z
   .strictObject({
@@ -41,19 +48,10 @@ export const updateUserSchema = z
   });
 export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
-/**
- * Filters for GET /users.
- *
- * `status` is applied as a DynamoDB FilterExpression: the index is read first
- * and non-matching items are discarded after, so a page can come back shorter
- * than `limit` while still having a `nextCursor`. That is normal and the
- * client must page until the cursor is absent, not until a page looks short.
- *
- * There is deliberately NO free-text search parameter. DynamoDB cannot serve
- * one without a full table Scan, and shipping a Scan behind a friendly query
- * string teaches the wrong thing -- see "Searching" in README.md for what to
- * do instead.
- */
+/** Filters for GET /users, merged with paginationQueryShape at the route. */
 export const listUsersQueryShape = {
+  role: z.enum(userRoleValues).optional(),
   status: z.enum(userStatusValues).optional(),
+  /** Case-insensitive partial match on name or email. */
+  q: z.string().min(1).max(255).optional(),
 };

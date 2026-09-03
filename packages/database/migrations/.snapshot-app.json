@@ -1,38 +1,36 @@
 {
-  "namespaces": [
-    "public"
-  ],
-  "name": "public",
+  "namespaces": [],
   "tables": [
     {
       "columns": {
         "id": {
           "name": "id",
-          "type": "serial",
-          "unsigned": false,
+          "type": "int",
+          "unsigned": true,
           "autoincrement": true,
           "primary": true,
           "nullable": false,
+          "length": null,
           "mappedType": "integer"
         },
         "created_at": {
           "name": "created_at",
-          "type": "timestamptz",
+          "type": "datetime(3)",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
           "nullable": false,
-          "length": 6,
+          "length": 3,
           "mappedType": "datetime"
         },
         "updated_at": {
           "name": "updated_at",
-          "type": "timestamptz",
+          "type": "datetime(3)",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
           "nullable": false,
-          "length": 6,
+          "length": 3,
           "mappedType": "datetime"
         },
         "email": {
@@ -42,6 +40,17 @@
           "autoincrement": false,
           "primary": false,
           "nullable": false,
+          "length": 255,
+          "mappedType": "string"
+        },
+        "email_active": {
+          "name": "email_active",
+          "type": "varchar(255)",
+          "generated": "always as (if(`deleted_at` is null, `email`, null)) stored",
+          "unsigned": false,
+          "autoincrement": false,
+          "primary": false,
+          "nullable": true,
           "length": 255,
           "mappedType": "string"
         },
@@ -57,7 +66,7 @@
         },
         "role": {
           "name": "role",
-          "type": "text",
+          "type": "enum('admin','member')",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
@@ -71,7 +80,7 @@
         },
         "status": {
           "name": "status",
-          "type": "text",
+          "type": "enum('active','suspended')",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
@@ -85,35 +94,27 @@
         },
         "deleted_at": {
           "name": "deleted_at",
-          "type": "timestamptz",
+          "type": "datetime(3)",
           "unsigned": false,
           "autoincrement": false,
           "primary": false,
           "nullable": true,
-          "length": 6,
+          "length": 3,
           "mappedType": "datetime"
         }
       },
       "name": "users",
-      "schema": "public",
       "indexes": [
         {
-          "keyName": "users_active_email_unique",
-          "columnNames": [],
-          "composite": false,
+          "keyName": "users_created_at_index",
+          "columnNames": [
+            "created_at",
+            "id"
+          ],
+          "composite": true,
           "constraint": false,
           "primary": false,
-          "unique": false,
-          "expression": "create unique index \"users_active_email_unique\" on \"users\" (\"email\") where \"deleted_at\" is null"
-        },
-        {
-          "keyName": "users_active_created_at_index",
-          "columnNames": [],
-          "composite": false,
-          "constraint": false,
-          "primary": false,
-          "unique": false,
-          "expression": "create index \"users_active_created_at_index\" on \"users\" (\"created_at\" desc, \"id\" desc) where \"deleted_at\" is null"
+          "unique": false
         },
         {
           "keyName": "users_status_created_at_index",
@@ -127,7 +128,7 @@
           "unique": false
         },
         {
-          "keyName": "users_pkey",
+          "keyName": "PRIMARY",
           "columnNames": [
             "id"
           ],

@@ -1,5 +1,5 @@
 import { Migrator } from "@mikro-orm/migrations";
-import { defineConfig } from "@mikro-orm/postgresql";
+import { defineConfig } from "@mikro-orm/mysql";
 
 import { entities } from "./entities/index.ts";
 
@@ -7,17 +7,25 @@ export interface DatabaseConfigOptions {
   databaseUrl: string;
   pool?: { min: number; max: number };
   /**
-   * Postgres `statement_timeout` for every connection, in milliseconds.
+   * MySQL `max_execution_time` for every connection, in milliseconds.
    *
    * WHY THIS IS NOT THE SAME AS THE HTTP REQUEST TIMEOUT: aborting an HTTP
    * request stops us *waiting* for the query. It does not stop the query --
-   * Postgres keeps executing it, holding its locks and its worker, until it
-   * finishes on its own. A slow endpoint under load therefore sheds its
-   * clients while the database keeps doing all of the work, which is the
-   * shape of an outage that looks fine in application metrics.
+   * the server keeps executing it, holding its locks, until it finishes. A
+   * slow endpoint under load therefore sheds its clients while the database
+   * keeps doing all of the work, which is the shape of an outage that looks
+   * fine in application metrics.
    *
-   * Set slightly above the HTTP timeout so the application-level error wins
-   * in the normal case and this stays the backstop.
+   * LIMITATION, and it is a real downgrade from Postgres: MySQL's
+   * `max_execution_time` applies to READ-ONLY SELECTs only. A slow UPDATE or
+   * DELETE has no server-side ceiling at all -- measured on 8.4, an UPDATE ran
+   * 15.8s against a 500ms setting, untouched, while a row-returning SELECT was
+   * cut off at 501ms with ER_QUERY_TIMEOUT. Postgres `statement_timeout`
+   * covered every statement; nothing here does. Long writes need a lock-wait
+   * timeout and batching instead.
+   *
+   * Set slightly above the HTTP timeout so the application-level error wins in
+   * the normal case and this stays the backstop.
    */
   statementTimeoutMs?: number;
   /**
@@ -58,9 +66,15 @@ export function createMikroOrmConfig({
               connection: { query: (sql: string, cb: (err: unknown) => void) => void },
               done: (err: unknown, conn: unknown) => void,
             ) => {
-              connection.query(`set statement_timeout = ${statementTimeoutMs}`, (err) =>
-                done(err, connection),
-              );
+              // UTC first, and unconditionally: MySQL's server default is
+              // `SYSTEM`, so without this a datetime column reads back in
+              // whatever zone the host happens to be in.
+              connection.query("set session time_zone = '+00:00'", (tzErr) => {
+                if (tzErr) return done(tzErr, connection);
+                connection.query(`set session max_execution_time = ${statementTimeoutMs}`, (err) =>
+                  done(err, connection),
+                );
+              });
             },
           }
         : {}),

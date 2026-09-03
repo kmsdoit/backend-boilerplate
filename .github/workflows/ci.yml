@@ -6,7 +6,7 @@ on:
 
 jobs:
   # Fast gate: everything that does not need a database. Kept separate so a
-  # formatting mistake fails in seconds instead of waiting on Postgres.
+  # formatting mistake fails in seconds instead of waiting on a database.
   static:
     runs-on: ubuntu-latest
     steps:
@@ -24,33 +24,33 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_DB: app_test
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: local_password
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd "pg_isready -U app -d app_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
+
+      - name: Start MySQL
+        # `docker compose`, not a `services:` block, so CI boots the database
+        # with the same flags and healthcheck a developer runs locally. The
+        # collation in particular is load-bearing: case-insensitive search is a
+        # property of utf8mb4_0900_ai_ci, not of the query, so a container
+        # started with different defaults would pass or fail differently.
+        run: bun run test:db:up
+
       - run: bun run test:db:migrate
       - run: bun run test:integration
-      # The Lambda bundle is built and invoked in the integration suite
-      # (backend/src/scripts/lambda.test.ts), but bundling itself can break
-      # independently -- knex requires database drivers that are not installed,
-      # so a dependency bump can add one to the list that must be externalized.
+      # Built separately from the suite that invokes the handler: bundling can
+      # break on its own, since knex `require`s database drivers that are not
+      # installed and a dependency bump can add one to the externals list.
       - run: bun run build:lambda
+
+      - name: MySQL logs
+        # Only on failure, and only the tail: a server that refuses to become
+        # healthy says why here, and without it the job reports a bare timeout.
+        if: failure()
+        run: docker compose logs --tail 100 mysql-test
 
   # The boilerplate's core promise: you can delete the bundled example, scaffold
   # your own domain, and still have a working, tested service. Without this job
@@ -60,26 +60,16 @@ jobs:
   # and a seed.ts left importing a removed entity).
   scaffolding:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_DB: app_test
-          POSTGRES_USER: app
-          POSTGRES_PASSWORD: local_password
-        ports:
-          - 5434:5432
-        options: >-
-          --health-cmd "pg_isready -U app -d app_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
+
+      - name: Start MySQL
+        run: bun run test:db:up
+
       - name: Delete the example and scaffold a new domain
         run: |
           bun run remove:domain user
@@ -89,6 +79,10 @@ jobs:
           bun run typecheck
           bun run lint
           bun run test
+
+      - name: MySQL logs
+        if: failure()
+        run: docker compose logs --tail 100 mysql-test
 
   docker:
     runs-on: ubuntu-latest

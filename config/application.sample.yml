@@ -38,7 +38,7 @@ server:
   requestTimeoutMs: 15000
 
 database:
-  url: postgresql://app:local_password@localhost:5433/app
+  url: mysql://app:local_password@localhost:3307/app
   # Optional. Defaults shown.
   pool:
     min: 2

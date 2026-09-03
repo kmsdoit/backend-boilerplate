@@ -17,7 +17,7 @@ server:
     maxWrites: 5
 
 database:
-  url: postgresql://app:local_password@localhost:5434/app_test
+  url: mysql://app:local_password@localhost:3308/app_test
 
 auth:
   jwtSecret: test-only-secret-value-at-least-32-characters

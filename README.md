@@ -1,13 +1,13 @@
 # backend-boilerplate
 
-A Bun + Hono + MikroORM + PostgreSQL monorepo you can put a real service on top
+A Bun + Hono + MikroORM + MySQL monorepo you can put a real service on top
 of today. Extracted from a production control-plane service: the domain was
 removed, the load-bearing parts — configuration, auth, error handling,
 observability, lifecycle, and the test setup — were kept, along with the
 comments explaining why each one is the way it is.
 
 ```bash
-bun run setup     # install, start PostgreSQL, migrate, seed
+bun run setup     # install, start MySQL, migrate, seed
 bun run dev       # http://localhost:3000
 ```
 
@@ -60,7 +60,7 @@ repository makes.
 | **Under load** | `statement_timeout`, pool acquire timeout, indexes matched to the real queries. |
 | **Data** | MikroORM entities, reviewable migrations, soft delete, partial unique index. |
 | **Scaffolding** | `new:domain` / `remove:domain` generate and reverse a domain across every layer. |
-| **Tests** | 87 tests: unit plus real-Postgres integration through the real app. |
+| **Tests** | 93 tests: unit plus real-MySQL integration through the real app. |
 | **Serverless** | AWS Lambda entrypoint and bundle, tested through a real API Gateway event. |
 | **Ship** | Multi-stage Dockerfile, one `verify` gate, CI that proves the example is deletable. |
 
@@ -98,14 +98,14 @@ bun run remove:domain <name>
 
 bun run build:lambda        # -> dist/lambda/index.mjs (AWS Lambda)
 
-bun run db:up / db:down     # dev PostgreSQL (:5433)
+bun run db:up / db:down     # dev MySQL (:3307)
 bun run db:generate         # migration from the entity diff — READ IT before committing
 bun run db:migrate / db:rollback / db:status / db:seed
 
 bun run test                # all 5 projects
 bun run test:unit           # no database needed
 bun run test:integration    # database + backend
-bun run test:db:up          # test PostgreSQL (:5434), separate from dev
+bun run test:db:up          # test MySQL (:3308), separate from dev
 ```
 
 ## Adding a domain
@@ -189,7 +189,7 @@ Two rules are enforced at load rather than left to review:
 ## Testing
 
 ```bash
-bun run test:db:up      # test PostgreSQL on :5434, separate from dev
+bun run test:db:up      # test MySQL on :3308, separate from dev
 bun run test
 ```
 
@@ -201,7 +201,7 @@ sentence naming the command, instead of twenty failures saying
 `relation "users" does not exist`.
 
 Five projects: `config`, `contracts`, `observability` (no database), plus
-`database` and `backend` (real Postgres). Narrow a run:
+`database` and `backend` (real MySQL). Narrow a run:
 
 ```bash
 APP_CONFIG_PATH=./config/application.test.yml bunx vitest run --project backend
@@ -256,7 +256,7 @@ bun run build:lambda      # -> dist/lambda/index.mjs
 | Config | `APP_CONFIG` (the YAML itself) or `APP_CONFIG_PATH`, plus the `${VAR}` secrets it references |
 
 Verified end to end: the built bundle was invoked under plain Node 22 with a
-real API Gateway v2 event against a real Postgres — `/health` 200, `/ready` 200
+real API Gateway v2 event against a real MySQL — `/health` 200, `/ready` 200
 with a live database check, `/users` 401 through the auth gate.
 `backend/src/scripts/lambda.test.ts` runs the same path in CI.
 
@@ -265,10 +265,10 @@ code — `backend/src/scripts/lambda.ts` documents each at the site:
 
 - **Connections.** Every warm container holds its own pool, so the real count is
   `pool.max` × concurrent containers. At the default `max: 10` and 100
-  concurrent invocations that is 1000 connections against a Postgres whose
-  default `max_connections` is 100. Set `database.pool.max` to 1 and put RDS
-  Proxy in front. This is the usual way a Lambda + Postgres deployment falls
-  over on its first load spike.
+  concurrent invocations that is 1000 connections against a MySQL whose
+  default `max_connections` is 151. Set `database.pool.max` to 1 and put RDS
+  Proxy in front. This is the usual way a Lambda + relational-database
+  deployment falls over on its first load spike.
 - **No shutdown hook.** The container is frozen and may be destroyed without
   warning, so the pool is never closed politely. That is fine, and it is why the
   graceful shutdown in `server.ts` is absent here rather than merely unused.
@@ -278,8 +278,8 @@ code — `backend/src/scripts/lambda.ts` documents each at the site:
 
 ### Cloudflare Workers — needs a different data layer
 
-Measured, not guessed. `packages/database` uses MikroORM's PostgreSQL driver,
-which is `@mikro-orm/knex` + `pg`. Bundling it pulls in `net`, `tls`, `dns`,
+Measured, not guessed. `packages/database` uses MikroORM's MySQL driver, which
+is `@mikro-orm/knex` + `mysql2`. Bundling it pulls in `net`, `tls`, `dns`,
 `child_process` and `fs`; Workers offers none of them — a TCP socket there comes
 from `cloudflare:sockets`, which knex cannot use. knex's dialect registry also
 `require`s eleven database drivers you never installed, each needing a stub.
@@ -294,7 +294,7 @@ one small file next to it, not a refactor.
 
 A Workers port is therefore a data-layer decision, not a rewrite:
 
-- **Hyperdrive + `postgres.js`** — keeps Postgres and your SQL, pools at the edge.
+- **Hyperdrive** — keeps MySQL and your SQL, pooling connections at the edge.
 - **Drizzle** with the Neon or Hyperdrive driver — closest to the current shape.
 - **D1** or **DynamoDB** — a different database, and the reason serverless is
   easy there: no connection pool to exhaust in the first place.
@@ -306,7 +306,7 @@ change when the driver underneath them does.
 ### Choosing
 
 If serverless is a hard requirement, pick the database first — that single
-choice, not the HTTP layer, decides how hard the rest is. Postgres plus a
+choice, not the HTTP layer, decides how hard the rest is. MySQL plus a
 connection pooler works on Lambda and is what this repo ships. A
 connectionless store (DynamoDB, D1) is what makes an edge runtime
 straightforward, at the cost of the relational model this boilerplate's
@@ -317,6 +317,29 @@ migrations, partial indexes and transactions are built around.
 The things that actually bite in production, and what this repo does about
 them. Numbers were measured on a 200k-row table, not estimated.
 
+**MySQL has no partial indexes, and the soft-delete design depended on one.**
+The Postgres original kept email unique among live rows with
+`create unique index ... where deleted_at is null`. That is a syntax error on
+MySQL (verified on 8.4). The replacement is a STORED generated column,
+`email_active`, holding the address while the row is live and NULL once it is
+soft-deleted: a UNIQUE index treats every NULL as distinct, so live addresses
+collide and deleted ones do not. Verified end to end — duplicate live email is
+409, and the address is reusable after a soft delete. STORED rather than
+VIRTUAL because MySQL cannot build a UNIQUE index over a virtual column.
+
+**Case-insensitive search is a property of the collation, not the query.**
+There is no `ILIKE` on MySQL; the repository uses `LIKE`, and
+`utf8mb4_0900_ai_ci` (pinned in compose.yaml) is what makes it
+case-insensitive. Move the table to a `_bin` or `_cs` collation and search
+silently becomes case-sensitive with no code change to notice.
+
+**Timestamps need the session forced to UTC.** MySQL has no `timestamptz`, and
+a fresh server reports `@@session.time_zone = SYSTEM`, so `datetime` columns
+read back in whatever zone the host is in. `createMikroOrmConfig` sets
+`time_zone = '+00:00'` on every connection. The columns are `datetime(3)`
+because MySQL's default precision is whole seconds, which quietly makes
+`createdAt` a poor tiebreaker.
+
 **Index the query you actually run, not the columns you happen to filter on.**
 `GET /users` with no filter was a full sequential scan (12.2ms, 200k rows read
 and sorted to return 20) because the only index required a `status` value.
@@ -324,20 +347,25 @@ and sorted to return 20) because the only index required a `status` value.
 **0.027ms**. When you add a domain, run `explain (analyze)` on the query your
 repository emits before assuming an index helps.
 
-**An HTTP timeout does not stop a query.** Aborting the request stops us
-*waiting*; Postgres keeps executing, holding its locks and its worker. That is
-why `statementTimeoutMs` is set on every connection — verified: a 10s query is
-cancelled at 1002ms under a 1s timeout. Without it, a slow endpoint sheds its
-clients while the database keeps doing all the work, an outage that looks fine
-in application metrics.
+**An HTTP timeout does not stop a query, and MySQL can only half-fix that.**
+Aborting the request stops us *waiting*; the server keeps executing, holding
+its locks. `statementTimeoutMs` sets `max_execution_time` on every connection,
+which does cut off a row-returning SELECT — measured: `ER_QUERY_TIMEOUT` at
+501ms against a query whose baseline was 8.2s.
+
+But `max_execution_time` applies to **read-only SELECTs only**. A slow UPDATE
+or DELETE has no server-side ceiling at all: measured, an UPDATE ran 15.8s
+against a 500ms setting, untouched. Postgres `statement_timeout` covered every
+statement; nothing here does. Bound long writes with `innodb_lock_wait_timeout`
+and by batching them, not by this setting.
 
 **A saturated pool must fail, not hang.** `acquireTimeoutMs` (default 5s) turns
 pool exhaustion into a visible error you can alert on instead of requests that
 wait forever.
 
 **Connection budget is per process.** `pool.max` × replicas must stay under
-Postgres `max_connections` (default 100), leaving room for migrations, psql and
-monitoring. 10 replicas × `max: 10` is already the whole budget. Use a pooler
+MySQL `max_connections` (default 151), leaving room for migrations, a client
+session and monitoring. 10 replicas × `max: 10` is already the whole budget. Use a pooler
 (PgBouncer) before raising either number.
 
 **`CREATE INDEX` locks the table.** Every migration here uses plain
@@ -354,7 +382,7 @@ part that helps. Pinned by a test.
 
 **Known limits, not yet addressed** — decide before you rely on them:
 
-- `GET /users?q=` is `ILIKE '%term%'`, which no btree index can serve: 200k rows
+- `GET /users?q=` is `LIKE '%term%'`, which no btree index can serve: 200k rows
   scanned twice per request (rows + count), ~100ms, growing linearly. Needs a
   `pg_trgm` GIN index or a real search column.
 - Pagination is `OFFSET`-based, so page depth costs linearly (offset 100000 read
@@ -368,8 +396,14 @@ this list is so you know they exist.
 
 **`instanceof` on ORM exceptions silently fails.** Two on-disk copies of
 `@mikro-orm/core` mean the class thrown and the class imported are different
-constructors, and `instanceof` returns false. Match on `err.code === "23505"` —
+constructors, and `instanceof` returns false. Match on `err.errno === 1062` —
 that is what `isUniqueViolation` does.
+
+**MySQL does not tell you which constraint was violated.** Postgres exposes a
+`constraint` field; MySQL puts the index name only inside the message
+(`Duplicate entry 'a@x.com' for key 'users.users_active_email_unique'`), so
+`uniqueViolationIndexName` parses it back out. The table qualifier is optional
+in that pattern because 5.7 omitted it and 8.0 added it.
 
 **`db:generate` wants to drop partial unique indexes.** MikroORM cannot express
 a `WHERE` clause from an entity, so it reads the index as "should not exist".
@@ -433,7 +467,7 @@ workspace package at all — that is why the test preflight lives in
   writing only a job row — do the job insert and the queue publish in one
   transaction, never publish after commit, so a crash between the two is
   impossible.
-- **More than one replica**: move the rate limiter's state to Redis or Postgres.
+- **More than one replica**: move the rate limiter's state to Redis or a shared table.
 - **Tracing**: the correlation id in `AppEnv` is already the seam; swap
   `crypto.randomUUID()` for a W3C traceparent.
 - **Search**: add `pg_trgm` and a GIN index, or a dedicated search column,

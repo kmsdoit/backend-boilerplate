@@ -18,13 +18,13 @@ if [ ! -f config/application.yml ]; then
   cp config/application.sample.yml config/application.yml
 fi
 
-step "Starting PostgreSQL"
+step "Starting MySQL"
 if ! docker info >/dev/null 2>&1; then
   echo "Docker is not running. Start Docker Desktop (or point config/application.yml"
   echo "at a database you already have) and re-run: bun run setup"
   exit 1
 fi
-docker compose up -d --wait postgres
+docker compose up -d --wait mysql
 
 step "Applying migrations"
 bun run db:migrate

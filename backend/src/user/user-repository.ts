@@ -38,9 +38,18 @@ export function createUserRepository(em: EntityManager) {
         where.status = filter.status;
       }
       if (filter.q) {
-        // $ilike is case-insensitive. The wildcards are added here rather than
-        // taken from the caller so a client cannot smuggle in a pattern.
-        where.$or = [{ name: { $ilike: `%${filter.q}%` } }, { email: { $ilike: `%${filter.q}%` } }];
+        // $like, not $ilike: MySQL has no ILIKE operator (MikroORM passes the
+        // keyword straight through and the server rejects it). Case-insensitivity
+        // comes from the COLLATION instead -- utf8mb4_0900_ai_ci, the 8.0
+        // default and what compose.yaml pins, compares case-insensitively.
+        //
+        // That means the behaviour is a property of the schema, not the query:
+        // move this table to a _bin or _cs collation and search silently
+        // becomes case-sensitive with no code change to notice.
+        //
+        // The wildcards are added here rather than taken from the caller so a
+        // client cannot smuggle in a pattern.
+        where.$or = [{ name: { $like: `%${filter.q}%` } }, { email: { $like: `%${filter.q}%` } }];
       }
 
       // findAndCount issues the rows query and the COUNT in one call. Doing it

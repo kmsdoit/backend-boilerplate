@@ -14,7 +14,7 @@ server:
     maxWrites: 30
 
 database:
-  url: postgresql://app:local_password@localhost:5433/app
+  url: mysql://app:local_password@localhost:3307/app
 
 auth:
   jwtSecret: local-development-only-secret-at-least-32-chars

@@ -1,7 +1,7 @@
 import type { ErrorHandler } from "hono";
 import { HTTPException } from "hono/http-exception";
 
-import { isUniqueViolation } from "@app/database";
+import { isUniqueViolation, uniqueViolationIndexName } from "@app/database";
 import { logger } from "@app/observability";
 
 import { uniqueConstraintErrors } from "../api/routes/errors.ts";
@@ -33,7 +33,8 @@ export const errorHandler: ErrorHandler<AppEnv> = (rawErr, c) => {
   // that rejection to the same status the guard itself would have produced,
   // so a caller cannot tell whether they lost a race or arrived second.
   if (isUniqueViolation(rawErr)) {
-    const mapped = rawErr.constraint ? uniqueConstraintErrors[rawErr.constraint] : undefined;
+    const indexName = uniqueViolationIndexName(rawErr);
+    const mapped = indexName ? uniqueConstraintErrors[indexName] : undefined;
     if (mapped) {
       err = mapped();
     }

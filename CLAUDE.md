@@ -96,9 +96,14 @@ only under `if (body.x !== undefined)`.
 
 Each of these has caused a real bug. Full detail is in README.md and at each site.
 
-- `instanceof` on MikroORM exceptions silently fails — match `err.code === "23505"`.
-- `db:generate` tries to drop the partial unique index; the `@Index({ expression })`
-  on `User` is what stops it. Read every generated migration.
+- `instanceof` on MikroORM exceptions silently fails — match `err.errno === 1062`.
+- MySQL does not expose which constraint failed; the index name is only in the
+  message, so `uniqueViolationIndexName` parses it out.
+- No partial indexes. Uniqueness among live rows is the `email_active` STORED
+  generated column plus a UNIQUE index — do not "simplify" it away.
+- No `ILIKE`. Case-insensitivity comes from the utf8mb4_0900_ai_ci collation.
+- `max_execution_time` bounds SELECTs only; writes have no server-side ceiling.
+- Read every generated migration before committing it.
 - `migrations/.snapshot-*.json` is committed on purpose -- it is what `db:generate`
   diffs against. Delete it and a fresh clone regenerates the whole schema as a
   duplicate migration. Its filename tracks the database name.
@@ -125,7 +130,7 @@ Each of these has caused a real bug. Full detail is in README.md and at each sit
 - **`CREATE INDEX` blocks writes.** Fine on an empty table, an outage on a live
   one. Use `CONCURRENTLY` (and disable the migration's transaction) for a
   populated table.
-- `pool.max` × replicas must stay under Postgres `max_connections`.
+- `pool.max` × replicas must stay under MySQL `max_connections` (default 151).
 
 ## Conventions
 

@@ -1,4 +1,4 @@
-import { MikroORM } from "@mikro-orm/postgresql";
+import { MikroORM } from "@mikro-orm/mysql";
 
 import { createMikroOrmConfig, type DatabaseConfigOptions } from "./config.ts";
 

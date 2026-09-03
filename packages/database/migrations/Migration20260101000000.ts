@@ -3,43 +3,51 @@ import { Migration } from "@mikro-orm/migrations";
 /**
  * Initial schema.
  *
- * Hand-written rather than generated, because the partial unique index below
- * is something `db:generate` cannot produce from the entity definitions --
- * see the TRAP comment on the matching @Index decorator in
- * src/entities/user.ts. Read every generated migration before committing it
- * for the same reason: the diff engine cannot see the index and will happily
- * emit a `drop index` for it.
+ * Hand-written rather than generated, because the generated column below is
+ * the load-bearing piece and deserves to be read rather than diffed into
+ * existence. Read every generated migration for the same reason.
  */
 export class Migration20260101000000 extends Migration {
   override async up(): Promise<void> {
     this.addSql(`
-      create table "users" (
-        "id" serial primary key,
-        "created_at" timestamptz not null,
-        "updated_at" timestamptz not null,
-        "email" varchar(255) not null,
-        "name" varchar(255) not null,
-        "role" text check ("role" in ('admin', 'member')) not null default 'member',
-        "status" text check ("status" in ('active', 'suspended')) not null default 'active',
-        "deleted_at" timestamptz null
-      );
+      create table \`users\` (
+        \`id\` int unsigned not null auto_increment primary key,
+        \`created_at\` datetime(3) not null,
+        \`updated_at\` datetime(3) not null,
+        \`email\` varchar(255) not null,
+        \`name\` varchar(255) not null,
+        \`role\` enum('admin', 'member') not null default 'member',
+        \`status\` enum('active', 'suspended') not null default 'active',
+        \`deleted_at\` datetime(3) null,
+        -- Holds the address while the row is live, NULL once soft-deleted.
+        -- MySQL has no partial indexes, and a UNIQUE index treats every NULL as
+        -- distinct, so this reproduces "unique among live rows" exactly.
+        -- STORED because MySQL cannot index a VIRTUAL column uniquely.
+        \`email_active\` varchar(255)
+          generated always as (if(\`deleted_at\` is null, \`email\`, null)) stored
+      ) default character set utf8mb4 engine = InnoDB;
     `);
 
-    // Uniqueness that applies to live rows only. A plain UNIQUE(email) would
-    // make an address permanently unusable after the user holding it is
-    // soft-deleted.
     this.addSql(`
-      create unique index "users_active_email_unique"
-        on "users" ("email") where "deleted_at" is null;
+      alter table \`users\`
+        add unique \`users_active_email_unique\` (\`email_active\`);
     `);
 
-    // Supports the default list query: filter by status, order by created_at.
+    // Supports filtering by status; ordering still needs the index below.
     this.addSql(`
-      create index "users_status_created_at_index" on "users" ("status", "created_at");
+      alter table \`users\`
+        add index \`users_status_created_at_index\` (\`status\`, \`created_at\`);
+    `);
+
+    // Serves the default list query. Cannot exclude soft-deleted rows the way
+    // the Postgres original did -- no partial indexes -- so it covers them too.
+    this.addSql(`
+      alter table \`users\`
+        add index \`users_created_at_index\` (\`created_at\`, \`id\`);
     `);
   }
 
   override async down(): Promise<void> {
-    this.addSql(`drop table if exists "users" cascade;`);
+    this.addSql(`drop table if exists \`users\`;`);
   }
 }

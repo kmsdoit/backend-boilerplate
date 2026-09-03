@@ -55,7 +55,7 @@ let adminToken: string;
 
 beforeEach(async () => {
   const em = await getEntityManager();
-  await em.getConnection().execute("truncate table users restart identity cascade");
+  await em.getConnection().execute("truncate table users");
 
   // A FRESH actor id per test, deliberately.
   //

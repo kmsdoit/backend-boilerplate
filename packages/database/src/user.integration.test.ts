@@ -11,7 +11,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { applicationConfig } from "@app/config";
 
 import { User } from "./entities/user.ts";
-import { isUniqueViolation } from "./errors.ts";
+import { isUniqueViolation, uniqueViolationIndexName } from "./errors.ts";
 import { closeORM, getEntityManager } from "./orm.ts";
 
 const databaseOptions = { databaseUrl: applicationConfig.database.url };
@@ -22,7 +22,7 @@ async function freshEm() {
 
 beforeEach(async () => {
   const em = await freshEm();
-  await em.getConnection().execute("truncate table users restart identity cascade");
+  await em.getConnection().execute("truncate table users");
 });
 
 afterAll(async () => {
@@ -45,10 +45,14 @@ describe("users_active_email_unique", () => {
       caught = err;
     }
 
-    // Matched by SQLSTATE + constraint name, never by `instanceof` -- see the
-    // TRAP comment in errors.ts for why instanceof silently fails here.
+    // Matched by errno, never by `instanceof` -- see the TRAP comment in
+    // errors.ts for why instanceof silently fails here.
     expect(isUniqueViolation(caught)).toBe(true);
-    expect((caught as { constraint?: string }).constraint).toBe("users_active_email_unique");
+    // MySQL puts the index name only in the message, unlike Postgres which
+    // exposes a `constraint` field, so it has to be parsed back out.
+    expect(uniqueViolationIndexName(caught as { message: string })).toBe(
+      "users_active_email_unique",
+    );
   });
 
   // The point of the partial index: a soft-deleted user must not hold their
